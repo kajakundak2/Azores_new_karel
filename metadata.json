@@ -1,0 +1,8 @@
+{
+  "name": "Azores Travel Itinerary",
+  "description": "A real-time collaborative travel itinerary app for a trip to the Azores, featuring drag-and-drop planning, Google Maps integration, and an interactive Gemini AI assistant.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": []
+}
