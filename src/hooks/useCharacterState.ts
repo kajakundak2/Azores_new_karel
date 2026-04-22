@@ -45,7 +45,7 @@ export type SidekickScene =
 // ASSET PATHS
 // ═══════════════════════════════════════════════════
 
-const GUIDES_PATH = '/pictures/Guides';
+const GUIDES_PATH = '/pictures/guides';
 
 export const SARA_ASSETS: Record<string, string> = {
   idle: `${GUIDES_PATH}/sara_idle.png`,

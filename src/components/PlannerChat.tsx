@@ -115,7 +115,7 @@ export function PlannerChat({
                 msg.role === 'model' ? 'bg-emerald-500/20 border-emerald-500/30' : 'bg-white/10 border-white/10'
               }`}>
                 <img 
-                  src={msg.role === 'model' ? '/pictures/Guides/sara_idle.png' : '/pictures/Guides/Kaja.png'} 
+                  src={msg.role === 'model' ? '/pictures/guides/sara_idle.png' : '/pictures/guides/Kaja.png'} 
                   className="w-full h-full object-cover" 
                   alt={msg.role} 
                 />

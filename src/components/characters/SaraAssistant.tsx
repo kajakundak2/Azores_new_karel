@@ -50,7 +50,7 @@ export function SaraAssistant({
 
   // Override Sara state when in awake mode (waving)
   const effectiveSaraState = awakeMode ? {
-    imageSrc: '/pictures/Guides/sara_desk_waving.png',
+    imageSrc: '/pictures/guides/sara_desk_waving.png',
     animation: 'bounce' as const,
     speechBubble: 'Hey! 👋',
   } : saraState;
