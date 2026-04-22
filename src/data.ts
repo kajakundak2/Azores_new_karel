@@ -1,15 +1,123 @@
-export type Category = 'Sightseeing' | 'Activity' | 'Food' | 'Transport' | 'Special';
+export type Category = 'Sightseeing' | 'Activity' | 'Food' | 'Transport' | 'Special' | 'City' | 'Event';
+
+export interface TravelerProfile {
+  id: string;
+  name: string;
+  gender: 'male' | 'female' | 'child' | 'unspecified';
+  age?: number;
+}
+
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  text: string;
+  timestamp?: string;
+  uiCards?: POI[];
+}
 
 export interface POI {
   id: string;
   title: Record<string, string>;
-  description: Record<string, string>;
+  description?: Record<string, string>;
   category: Category;
   duration: number; // in minutes
-  imageUrl: string;
+  imageUrl?: string;
   fixed?: boolean;
   time?: string;
   location?: { lat: number; lng: number };
+  
+  // Rich Data
+  images?: string[];
+  rating?: number;
+  reviewCount?: number;
+  bookingLink?: string;
+  locationDesc?: Record<string, string>;
+  priceInEuro?: string;
+  cost?: number;        // Parsed cost value (Phase 4)
+  startTime?: string;   // Suggested start time (Phase 4)
+  address?: string; // New: Full address for Google Maps style
+  googleMapsUrl?: string; // New: Direct link for export/viewing
+  transportModeTo?: 'car' | 'bus' | 'walk' | 'bicycle'; // New: User preferred arrival mode
+}
+
+export interface TransitNode {
+  type: 'transit';
+  mode: 'car' | 'bus' | 'walk' | 'bicycle' | 'flight';
+  durationMins: number;
+  distanceKm?: number;
+  fromPoiId?: string;
+  toPoiId?: string;
+}
+
+export type TimelineItem = POI | TransitNode;
+
+export interface Flight {
+  id: string;
+  direction: 'outbound' | 'inbound';
+  airline: string;
+  airlineLogoUrl?: string;
+  departureAirport: string;
+  arrivalAirport: string;
+  departureTime: string; // ISO string 
+  arrivalTime: string; // ISO string
+  durationMins: number;
+  stops: number;
+  price?: string;
+}
+
+export interface Stay {
+  id: string;
+  name: string;
+  checkInDate: string; // YYYY-MM-DD
+  checkOutDate: string; // YYYY-MM-DD
+  nights: number;
+  rating?: number;
+  reviewCount?: number;
+  price?: string;
+  pricePerNight?: number; // in EUR
+  currency?: string;
+  imageUrl?: string;
+  address?: string;
+  location?: { lat: number; lng: number };
+  description?: string;
+  bookingUrl?: string;
+  placeId?: string; // Google Places ID
+}
+
+export interface ReferenceDoc {
+  id: string;
+  name: string;
+  content: string;
+  type: string;
+}
+
+export interface Trip {
+  id: string;
+  title: string;
+  destination: string;
+  description?: string;
+  startDate: string; // YYYY-MM-DD
+  endDate: string; // YYYY-MM-DD
+  travelers: number; // total
+  adults: number;
+  kids: number;
+  kidsAges?: number[];
+  preferences?: string; // New: High-level preferences from AI chat (e.g. "Foodie, Nature, Active")
+  // A trip holds its own daily itinerary
+  itinerary: Record<string, POI[]>;
+  logistics: {
+    flights: Flight[];
+    stays: Stay[];
+    packingRequirements?: string;
+  };
+  isActive?: boolean; // simple flag if we need locally
+  libraryPois?: POI[]; // Dynamic initial library
+  dayThemes?: Record<string, string>; // ISO date -> Theme string
+  inspirationVideos?: { id: number; video: string; label: string; thumbnail?: string; }[]; // Dynamic reels
+  chatHistory?: ChatMessage[]; // Persisted chat with Sara
+  originalRequest?: string; // The user's original trip description/request
+  travelerProfiles?: TravelerProfile[]; // Individual traveler details
+  planningMode?: 'full' | 'suggestions_only'; // New: Choice between complete plan or just POI suggestions
+  referenceDocs?: ReferenceDoc[]; // New: Documents uploaded by the user
 }
 
 export const SLIDES = [
@@ -22,268 +130,418 @@ export const SLIDES = [
   '/pictures/7.png',
 ];
 
-export const AZORES_POIS: POI[] = [
-  {
-    id: 'poi-1',
-    title: { en: 'Sete Cidades Crater', cs: 'Kráter Sete Cidades' },
-    description: { 
-      en: 'The legendary blue and green lakes of Sao Miguel. Pro Tip: Head to Miradouro da Grota do Inferno for the world-famous view. Bring a light jacket as the ridge is often windy.', 
-      cs: 'Legendární modré a zelené jezera ostrova Sao Miguel. Pro tip: Vyrazte na Miradouro da Grota do Inferno pro světoznámý výhled. Vezměte si lehkou bundu, protože na hřebeni často fouká.' 
-    },
-    category: 'Sightseeing',
-    duration: 120,
-    imageUrl: 'https://images.unsplash.com/photo-1583062312644-83979878170d?auto=format&fit=crop&w=1200&q=80',
-    location: { lat: 37.8672, lng: -25.7924 }
-  },
-  {
-    id: 'poi-2',
-    title: { en: 'Terra Nostra Gardens', cs: 'Zahrady Terra Nostra' },
-    description: { 
-      en: 'Thermal iron-rich water pool surrounded by exotic botanical gardens. Pro Tip: Wear an old swimsuit as the iron content will stain it orange forever. The surrounding garden is one of the best in the world.', 
-      cs: 'Termální bazén s vodou bohatou na železo obklopený exotickými zahradami. Pro tip: Vezměte si staré plavky, protože obsah železa je navždy obarví na oranžovo. Okolní zahrada je jednou z nejlepších na světě.' 
-    },
-    category: 'Activity',
-    duration: 180,
-    imageUrl: 'https://images.unsplash.com/photo-1590425046200-e79435b62b0e?auto=format&fit=crop&w=1200&q=80',
-    location: { lat: 37.7725, lng: -25.3311 }
-  },
-  {
-    id: 'poi-3',
-    title: { en: 'Lagoa do Fogo', cs: 'Lagoa do Fogo' },
-    description: { 
-      en: 'The "Lake of Fire", a high-altitude crater lake with white sand beaches. Pro Tip: Check the webcams (SpotAzores) before heading up. It is often covered in fog while the coast is sunny.', 
-      cs: '„Ohnivé jezero“, vysoko položené kráterové jezero s bílými písečnými plážemi. Pro tip: Před cestou nahoru zkontrolujte webkamery (SpotAzores). Často je tam mlha, i když na pobřeží svítí slunce.' 
-    },
-    category: 'Sightseeing',
-    duration: 150,
-    imageUrl: 'https://images.unsplash.com/photo-1582967788606-a171c1080cb0?auto=format&fit=crop&w=1200&q=80',
-    location: { lat: 37.7656, lng: -25.4851 }
-  },
-  {
-    id: 'poi-4',
-    title: { en: 'Whale Watching', cs: 'Pozorování velryb' },
-    description: { 
-      en: 'Experience the ocean giants in their natural Atlantic habitat. Pro Tip: Book the morning slot for calmer seas. PDL is one of the few places in the world to see Blue Whales in early summer.', 
-      cs: 'Zažijte oceánské obry v jejich přirozeném atlantském prostředí. Pro tip: Zarezervujte si ranní termín pro klidnější moře. PDL je jedním z mála míst na světě, kde můžete začátkem léta vidět plejtváky obrovské.' 
-    },
-    category: 'Activity',
-    duration: 240,
-    imageUrl: 'https://images.unsplash.com/photo-1518144591331-17a5dd71c477?auto=format&fit=crop&w=1200&q=80',
-    location: { lat: 37.7394, lng: -25.6681 }
-  },
-  {
-    id: 'poi-10',
-    title: { en: 'Gorreana Tea factory', cs: 'Čajová továrna Gorreana' },
-    description: { 
-      en: 'Europe\'s oldest and only tea plantations. Pro Tip: Walk the "Tea Path" through the fields before having a free tasting inside the factory. The views of the ocean through the green bushes are surreal.', 
-      cs: 'Nejstarší a jediné čajové plantáže v Evropě. Pro tip: Před bezplatnou ochutnávkou v továrně se projděte „Čajovou stezkou“ mezi poly. Výhledy na oceán skrze zelené keře jsou neskutečné.' 
-    },
-    category: 'Sightseeing',
-    duration: 90,
-    imageUrl: 'https://images.unsplash.com/photo-1501333198491-d3a31c50113c?auto=format&fit=crop&w=1200&q=80',
-    location: { lat: 37.8181, lng: -25.4022 }
-  },
-  {
-    id: 'poi-11',
-    title: { en: 'Caldeira Velha Hot Springs', cs: 'Horké prameny Caldeira Velha' },
-    description: { 
-      en: 'Warm jungle pools with a waterfall. Pro Tip: It feels like Jurassic Park. Book tickets online in advance as it is strictly limited for conservation.', 
-      cs: 'Teplé bazénky v džungli s vodopádem. Pro tip: Budete se cítit jako v Jurském parku. Lístky si kupte online předem, počet míst je přísně omezen.' 
-    },
-    category: 'Activity',
-    duration: 120,
-    imageUrl: 'https://images.unsplash.com/photo-1542332213-9b5a5a3fad35?auto=format&fit=crop&w=1200&q=80',
-    location: { lat: 37.7834, lng: -25.4833 }
-  },
-  {
-    id: 'poi-12',
-    title: { en: 'Salto do Prego Waterfall', cs: 'Vodopád Salto do Prego' },
-    description: { 
-      en: 'A hidden waterfall reached via a beautiful trek. Pro Tip: Bring swimwear for a very cold, refreshing dip. The trail also passes through an abandoned village called Sanguinho.', 
-      cs: 'Skrytý vodopád dostupný krásným trekem. Pro tip: Vezměte si plavky na velmi studené, osvějující tempo. Stezka také prochází opuštěnou vesnicí Sanguinho.' 
-    },
-    category: 'Activity',
-    duration: 180,
-    imageUrl: 'https://images.unsplash.com/photo-1501785888041-af3ef285b470?auto=format&fit=crop&w=1200&q=80',
-    location: { lat: 37.7478, lng: -25.1764 }
-  },
-  {
-    id: 'poi-13',
-    title: { en: 'Sete Cidades Kayaking', cs: 'Kajaky na Sete Cidades' },
-    description: { 
-      en: 'Paddle inside the dormant volcanic caldera. Pro Tip: Rent the kayaks from the small pier between the lakes. It\'s much quieter than the viewpoints and very peaceful.', 
-      cs: 'Pádlujte uvnitř spící sopečné kaldery. Pro tip: Půjčte si kajaky u malého mola mezi jezery. Je to tam mnohem klidnější než na vyhlídkách a velmi tiché.' 
-    },
-    category: 'Activity',
-    duration: 90,
-    imageUrl: 'https://images.unsplash.com/photo-1544551763-46a013bb70d5?auto=format&fit=crop&w=1200&q=80',
-    location: { lat: 37.8651, lng: -25.7909 }
-  },
-  {
-    id: 'poi-14',
-    title: { en: 'Ananas Arruda Plantation', cs: 'Ananasová plantáž Arruda' },
-    description: { 
-      en: 'Iconic Azores pineapple greenhouses. Pro Tip: Try the local pineapple liqueur and jam. These pineapples take nearly 2 years to grow in traditional smokehouses.', 
-      cs: 'Ikonické skleníky pro azorský ananas. Pro tip: Ochutnejte místní ananasový likér a džem. Pěstování těchto ananasů v tradičních udírnách trvá téměř 2 roky.' 
-    },
-    category: 'Sightseeing',
-    duration: 60,
-    imageUrl: 'https://images.unsplash.com/photo-1550258114-68bd295056a7?auto=format&fit=crop&w=1200&q=80',
-    location: { lat: 37.7556, lng: -25.6422 }
-  },
-  {
-    id: 'poi-15',
-    title: { en: 'Mosteiros Beach Sunset', cs: 'Západ slunce v Mosteiros' },
-    description: { 
-      en: 'Black sand beach with dramatic sea stacks. Pro Tip: Grab a local beer from the beach bar and watch the sun dip behind the rocks. It is the best sunset spot on the island.', 
-      cs: 'Pláž s černým pískem a dramatickými skalními útvary v moři. Pro tip: Kupte si místní pivo v baru na pláži a sledujte, jak slunce klesá za skály. Je to nejlepší místo na západ slunce.' 
-    },
-    category: 'Sightseeing',
-    duration: 90,
-    imageUrl: 'https://images.unsplash.com/photo-1559103433-28f096230f80?auto=format&fit=crop&w=1200&q=80',
-    location: { lat: 37.8924, lng: -25.8202 }
-  },
-  {
-    id: 'poi-16',
-    title: { en: 'Lagoa das Furnas', cs: 'Jezero Furnas' },
-    description: { 
-      en: 'See the underground cooking and boiling mud. Pro Tip: Arrive at 12:30 PM to see the restaurants pulling their "Cozido" pots out of the ground. The sulfur smell is intense!', 
-      cs: 'Podívejte se na vaření v podzemí a bublající bahno. Pro tip: Doražte ve 12:30, abyste viděli restaurace vytahovat hrnce „Cozido“ ze země. Síra je cítit opravdu silně!' 
-    },
-    category: 'Sightseeing',
-    duration: 120,
-    imageUrl: 'https://images.unsplash.com/photo-1583062312644-83979878170d?auto=format&fit=crop&w=1200&q=80',
-    location: { lat: 37.7728, lng: -25.3375 }
-  },
-  {
-    id: 'poi-17',
-    title: { en: 'Boca do Inferno Viewoint', cs: 'Vyhlídka Boca do Inferno' },
-    description: { 
-      en: 'The most photogenic spot in the Atlantic. Pro Tip: Park at Canaria Lake and walk the path towards the viewpoint. If it\'s foggy, wait 15 minutes, the wind changes fast.', 
-      cs: 'Nejfotogeničtější místo v Atlantiku. Pro tip: Zaparkujte u jezera Canaria a jděte pěšky k vyhlídce. Pokud je mlha, počkejte 15 minut, vítr se mění rychle.' 
-    },
-    category: 'Sightseeing',
-    duration: 60,
-    imageUrl: 'https://images.unsplash.com/photo-1589146143003-886ec1083bac?auto=format&fit=crop&w=1200&q=80',
-    location: { lat: 37.8422, lng: -25.7618 }
-  },
-  {
-    id: 'poi-18',
-    title: { en: 'Ermida da Nossa Senhora', cs: 'Ermida da Nossa Senhora' },
-    description: { 
-      en: 'Hilltop chapel with symmetrical white stairs. Pro Tip: Climb to the top for a panoramic view of Vila Franca do Campo and its famous islet. Perfect for morning photography.', 
-      cs: 'Kaple na vrcholu kopce se symetrickými bílými schody. Pro tip: Vystoupejte nahoru pro panoramatický výhled na Vila Franca do Campo a jeho slavný ostrůvek.' 
-    },
-    category: 'Sightseeing',
-    duration: 45,
-    imageUrl: 'https://images.unsplash.com/photo-1552733407-5d5c46c3bb3b?auto=format&fit=crop&w=1200&q=80',
-    location: { lat: 37.7122, lng: -25.4333 }
-  },
-  {
-    id: 'poi-19',
-    title: { en: 'Ponta da Ferraria', cs: 'Ponta da Ferraria' },
-    description: { 
-      en: 'A natural ocean pool heated by a thermal vent. Pro Tip: Go exactly at low tide. If the tide is too high, the hot water is cooled too much by the ocean surge.', 
-      cs: 'Přírodní bazén v oceánu vyhřívaný termálním vývěrem. Pro tip: Jděte tam přesně při odlivu. Pokud je příliv moc silný, horkou vodu příliš ochlazuje příboj.' 
-    },
-    category: 'Activity',
-    duration: 90,
-    imageUrl: 'https://images.unsplash.com/photo-1559103433-28f096230f80?auto=format&fit=crop&w=1200&q=80',
-    location: { lat: 37.8584, lng: -25.8544 }
-  },
-  {
-    id: 'poi-20',
-    title: { en: 'Cha Porto Formoso', cs: 'Chá Porto Formoso' },
-    description: { 
-      en: 'Beautiful tea shop with a terrace overlooking the ocean. Pro Tip: It\'s smaller and more intimate than Gorreana. The "Broken Orange Pekoe" is delicious.', 
-      cs: 'Krásná čajovna s terasou s výhledem na oceán. Pro tip: Je menší a intimnější než Gorreana. Jejich „Broken Orange Pekoe“ je vynikající.' 
-    },
-    category: 'Food',
-    duration: 60,
-    imageUrl: 'https://images.unsplash.com/photo-1544739313-6fad02872377?auto=format&fit=crop&w=1200&q=80',
-    location: { lat: 37.8202, lng: -25.4355 }
-  }
-];
+export const AZORES_POIS: POI[] = [];
 
-
-export const FIXED_EVENTS: Record<string, POI[]> = {
-  '2026-07-08': [
-    {
-      id: 'fix-1',
-      title: { en: 'Karel & Pedro Arrival', cs: 'Přílet - Karel a Pedro' },
-      description: { en: 'PDL Airport Arrival.', cs: 'Přílet na letiště v PDL.' },
-      category: 'Transport',
-      duration: 0,
-      time: '07:30',
-      imageUrl: '/pictures/5.png',
-      fixed: true,
-      location: { lat: 37.7428, lng: -25.6981 }
-    },
-    {
-      id: 'fix-2',
-      title: { en: 'Monika Arrival', cs: 'Přílet - Monika' },
-      description: { en: 'PDL Airport Arrival.', cs: 'Přílet na letiště v PDL.' },
-      category: 'Transport',
-      duration: 0,
-      time: '09:45',
-      imageUrl: '/pictures/6.png',
-      fixed: true,
-      location: { lat: 37.7428, lng: -25.6981 }
-    }
-  ],
-  '2026-07-12': [
-    {
-      id: 'fix-bday',
-      title: { en: 'Pedro\'s Birthday Dinner', cs: 'Narozeninová večeře Pedra' },
-      description: { en: 'Grand celebration at A Tasca or similar. Pro Tip: Book 3 weeks in advance!', cs: 'Velká oslava v A Tasca nebo podobně. Pro tip: Rezervujte 3 týdny předem!' },
-      category: 'Special',
-      duration: 180,
-      time: '20:00',
-      imageUrl: '/pictures/3.png',
-      fixed: true,
-      location: { lat: 37.7412, lng: -25.6667 }
-    }
-  ],
-  '2026-07-17': [
-    {
-      id: 'fix-3',
-      title: { en: 'Group Departure', cs: 'Odlet skupiny' },
-      description: { en: 'Final flight home. See you again, Azores!', cs: 'Závěrečný let domů. Brzy nashledanou, Azory!' },
-      category: 'Transport',
-      duration: 0,
-      time: '19:40',
-      imageUrl: '/pictures/7.png',
-      fixed: true,
-      location: { lat: 37.7428, lng: -25.6981 }
-    }
-  ]
-};
+export const FIXED_EVENTS: Record<string, POI[]> = {};
 
 export const TEXTS: Record<string, Record<string, string>> = {
   hero_title: {
-    en: 'The Azores Expedition 2026',
-    cs: 'Expedice Azory 2026'
+    en: 'SarAItinerary',
+    cs: 'SárAItinerář',
   },
   hero_subtitle: {
-    en: '10 Days of Exploration | July 8 - July 17',
-    cs: '10 dní průzkumu | 8. července - 17. července'
+    en: 'Intelligent Travel Itineraries',
+    cs: 'Chytré itineráře na cesty',
+  },
+  // Landing page keys
+  landing_title_itinerary: {
+    en: 'LANDING',
+    cs: 'TRASY',
+  },
+  landing_subtitle: {
+    en: 'INTELLIGENT EXPEDITION PLANNING',
+    cs: 'CHYTRÉ PLÁNOVÁNÍ EXPEDIC',
+  },
+  landing_readiness: {
+    en: 'READINESS',
+    cs: 'PŘIPRAVENOST',
+  },
+  architecture: {
+    en: 'ARCHITECTURE',
+    cs: 'ARCHITEKTURA',
+  },
+  mission_logistics: {
+    en: 'MISSION LOGISTICS',
+    cs: 'LOGISTIKA MISE',
+  },
+  landing_destination_label: {
+    en: 'DESTINATION',
+    cs: 'CÍL CESTY',
+  },
+  landing_destination_placeholder: {
+    en: 'Where to?',
+    cs: 'Kam jedeme?',
+  },
+  landing_timeframe_label: {
+    en: 'TIMEFRAME',
+    cs: 'TERMÍN',
+  },
+  adults: {
+    en: 'ADULTS',
+    cs: 'DOSPĚLÍ',
+  },
+  kids: {
+    en: 'CHILDREN',
+    cs: 'DĚTI',
   },
   cta_button: {
     en: 'START PLANNING',
-    cs: 'ZAČÍT PLÁNOVAT'
+    cs: 'ZAČÍT PLÁNOVAT',
   },
   itinerary: {
     en: 'Itinerary',
-    cs: 'Itinerář'
+    cs: 'Itinerář',
   },
   library: {
     en: 'Library',
-    cs: 'Knihovna'
+    cs: 'Knihovna',
   },
-  mission_intel: {
-    en: 'Mission Intel',
-    cs: 'Centrální Intel'
-  }
+  recent_trips: {
+    en: 'Recent Trips',
+    cs: 'Nedávné cesty'
+  },
+  empty_logbook: {
+    en: 'Empty Logbook',
+    cs: 'Prázdný deník'
+  },
+  travelers: {
+    en: 'Travelers',
+    cs: 'Cestovatelé'
+  },
+  chat_title: {
+    en: 'Chat with Sára',
+    cs: 'Chat se Sárou',
+  },
+  chat_placeholder: {
+    en: 'Ask Sára anything...',
+    cs: 'Zeptej se Sáry na cokoliv...'
+  },
+  chat_thinking: {
+    en: 'Sára is thinking...',
+    cs: 'Sára přemýšlí...'
+  },
+  drag_prompt: {
+    en: 'Drag places here\nto build the day',
+    cs: 'Přetáhněte místa sem\na sestavte den',
+  },
+  add_to_day: {
+    en: 'Add to Day',
+    cs: 'Přidat do dne',
+  },
+  remove: {
+    en: 'Remove',
+    cs: 'Odebrat',
+  },
+  packing_list: { en: 'Packing List', cs: 'Co s sebou' },
+  packing_traveler: { en: 'Traveler', cs: 'Cestovatel' },
+  packing_male: { en: 'Man', cs: 'Muž' },
+  packing_female: { en: 'Woman', cs: 'Žena' },
+  packing_child: { en: 'Child', cs: 'Dítě' },
+  packing_unspecified: { en: 'Traveler', cs: 'Cestovatel' },
+  packing_regenerate: { en: 'Regenerate AI', cs: 'Přegenerovat AI' },
+  packing_generating: { en: 'Generating...', cs: 'Generuji...' },
+  packing_add_item: { en: 'Add item...', cs: 'Přidat položku...' },
+  packing_no_items: { en: 'No items yet', cs: 'Žádné položky' },
+  packing_add_traveler: { en: 'Add a traveler above', cs: 'Přidejte cestovatele' },
+  packing_all: { en: 'All', cs: 'Vše' },
+  packing_packed: { en: 'packed', cs: 'zabaleno' },
+  packing_complete: { en: 'All packed! Ready to go!', cs: 'Zabaleno! Připraveni na cestu!' },
+  packing_incomplete: { en: 'Still packing...', cs: 'Ještě balíme...' },
+  age_children: { cs: 'Věk dětí', en: "Children's Ages" },
+  strategy_full_desc: { cs: 'Sára vytvoří kompletní rozvrh den po dni.', en: 'Sara will build a complete day-by-day schedule.' },
+  strategy_suggestions_desc: { cs: 'Sára vybere nejlepší místa, ale nechá vám volnou ruku v čase.', en: 'Sara will pick the best spots, but leave the timing up to you.' },
+  mystery_destination: { cs: 'Záhadné místo', en: 'Mystery Destination' },
+  finalizing: { cs: 'Finalizuji...', en: 'Finalizing...' },
+  create_itinerary: { cs: 'Vytvořit Itinerář', en: 'Create Itinerary' },
+  start_hint: { cs: 'Zadejte detaily nebo si popovídejte se Sárou', en: 'Enter trip details or talk to Sára to start' },
+  treasure_lost: { cs: 'Ztratili se při expedici. Odpovězte správně na otázky a ukažte jim správnou cestu.', en: 'They got lost during the expedition. Answer questions correctly to show them the right way.' },
+  treasure_preparing: { cs: 'PŘÍPRAVA MAPY...', en: 'PREPARING MAP...' },
+  treasure_start: { cs: 'ZJISTIT NÁPOVĚDU', en: 'START SEARCH' },
+  treasure_next: { cs: 'Další', en: 'Next' },
+  loading: { cs: 'Načítám...', en: 'Loading...' },
+  link_copied: { cs: 'Odkaz zkopírován!', en: 'Link copied to clipboard!' },
+  notification_planning: { cs: 'Sára zahajuje detailní plánování...', en: 'Sára is starting detailed planning...' },
+  notification_searching: { cs: 'Vyhledávám místa na mapě...', en: 'Looking up places on Google Maps...' },
+  notification_smart: { cs: '🔄 Spouštím chytré plánování pro celý výlet...', en: '🔄 Starting smart generation for the whole trip...' },
+  notification_updated: { cs: 'Sára aktualizovala detaily cesty.', en: 'Sára updated trip details.' },
+  notification_added: { cs: 'Přidáno do itineráře!', en: 'Added to itinerary!' },
+  units_person: { cs: 'os', en: 'px' },
+  lets_go: { cs: 'Jedeme!', en: "Let's go!" },
+  so_many_things: { cs: 'Tolik věcí...', en: 'So many things...' },
+  stays_manager: {
+    en: 'Stays',
+    cs: 'Ubytování',
+  },
+  add_stay: {
+    en: 'Add Stay',
+    cs: 'Přidat ubytování',
+  },
+  edit_dates: {
+    en: 'Edit Dates',
+    cs: 'Upravit data',
+  },
+  edit_travelers: {
+    en: 'Edit Travelers',
+    cs: 'Upravit cestovatele',
+  },
+  nights: {
+    en: 'nights',
+    cs: 'nocí',
+  },
+  per_night: {
+    en: '/night',
+    cs: '/noc',
+  },
+  search_places: {
+    en: 'Search places...',
+    cs: 'Hledat místa...',
+  },
+  no_stays: {
+    en: 'No accommodations yet',
+    cs: 'Zatím žádné ubytování',
+  },
+  total_cost: {
+    en: 'Total Cost',
+    cs: 'Celková cena',
+  },
+  price: {
+    en: 'Price',
+    cs: 'Cena',
+  },
+  description_label: {
+    en: 'Description',
+    cs: 'Popis',
+  },
+  directions: {
+    en: 'Directions',
+    cs: 'Navigace',
+  },
+  all_days: {
+    en: 'All Days',
+    cs: 'Všechny dny',
+  },
+  single_day: {
+    en: 'Single Day',
+    cs: 'Jeden den',
+  },
+  open_atlas: {
+    en: 'Open Atlas',
+    cs: 'Otevřít Atlas',
+  },
+  close_atlas: {
+    en: 'Close Atlas',
+    cs: 'Zavřít Atlas',
+  },
+  generating_itinerary: {
+    en: 'Generating Itinerary',
+    cs: 'Generuji itinerář',
+  },
+  gathering_spots: {
+    en: 'Gathering the best spots',
+    cs: 'Sbírám nejlepší místa',
+  },
+  sara_voice: {
+    en: 'Sara Voice Assistant',
+    cs: 'Hlasová asistentka Sára',
+  },
+  live_on_call: {
+    en: 'Live on Call',
+    cs: 'Na hovoru',
+  },
+  online_ready: {
+    en: 'Online & Ready',
+    cs: 'Online a připravena',
+  },
+  syncing_sara: {
+    en: 'Syncing with Sára',
+    cs: 'Synchronizace se Sárou',
+  },
+  trending_inspiration: {
+    en: 'Trending Inspiration',
+    cs: 'Trendová inspirace',
+  },
+  no_activities: {
+    en: 'No activities planned',
+    cs: 'Žádné naplánované aktivity',
+  },
+  drag_drop_here: {
+    en: 'Drag and drop places here',
+    cs: 'Přetáhněte místa sem',
+  },
+  total_time: {
+    en: 'Total Time',
+    cs: 'Celkový čas',
+  },
+  view_on_instagram: {
+    en: 'View on Instagram →',
+    cs: 'Zobrazit na Instagramu →',
+  },
+  discovering: {
+    en: 'Discovering...',
+    cs: 'Objevuji...',
+  },
+  added_to_itinerary: {
+    en: 'Added to itinerary!',
+    cs: 'Přidáno do itineráře!',
+  },
+  search_results: {
+    en: 'Search Results',
+    cs: 'Výsledky hledání',
+  },
+  atlas_library: {
+    en: 'Atlas Library',
+    cs: 'Knihovna Atlas',
+  },
+  search_in: {
+    en: 'Search in',
+    cs: 'Hledat v',
+  },
+  search_within_visible: {
+    en: 'Search within visible area only',
+    cs: 'Hledat pouze v zobrazené oblasti',
+  },
+  clear: {
+    en: 'Clear',
+    cs: 'Vymazat',
+  },
+  ask_destination: {
+    en: 'Ask me anything about the destination — weather, tips, route suggestions, restaurants.',
+    cs: 'Zeptejte se mě na cokoliv o destinaci — počasí, tipy, trasy, restaurace.',
+  },
+  sara_listening: {
+    en: 'Sára is listening...',
+    cs: 'Sára poslouchá...',
+  },
+  // Weather
+  weather_title_historical: { en: 'Climatic Averages', cs: 'Klimatické průměry' },
+  weather_title_forecast: { en: '7-Day Forecast', cs: 'Předpověď na 7 dní' },
+  weather_for: { en: 'For', cs: 'Pro' },
+  weather_hourly_historical: { en: 'Historical Hourly Estimate', cs: 'Historický hodinový odhad' },
+  weather_hourly_forecast: { en: 'Expert Hourly Forecast', cs: 'Expertní hodinová předpověď' },
+  weather_max_temp: { en: 'Max Temp', cs: 'Max teplota' },
+  weather_precip: { en: 'Percip.', cs: 'Srážky' },
+  weather_wind: { en: 'Wind', cs: 'Vítr' },
+  weather_hourly: { en: 'Hourly Conditions', cs: 'Hodinové podmínky' },
+  weather_dry: { en: 'Dry', cs: 'Sucho' },
+  weather_confidence: { en: 'Plan your day with confidence', cs: 'Plánujte den s jistotou' },
+  // Chat
+  chat_reset: { en: 'Reset conversation', cs: 'Resetovat konverzaci' },
+  chat_voice_architect: { en: 'Live Voice Architect', cs: 'Hlasový architekt' },
+  chat_voice_to_text: { en: 'Voice-to-Text', cs: 'Hlas na text' },
+  chat_upload_doc: { en: 'Upload Reference Document', cs: 'Nahrát referenční dokument' },
+  chat_end_call: { en: 'End Call', cs: 'Ukončit hovor' },
+  chat_connecting: { en: 'Connecting...', cs: 'Připojování...' },
+  chat_call_sara: { en: 'Call Sára', cs: 'Zavolat Sáře' },
+  // Timeline
+  timeline_drag: { en: 'Drag to reorder', cs: 'Přetáhněte pro změnu pořadí' },
+  timeline_remove: { en: 'Remove from itinerary', cs: 'Odebrat z itineráře' },
+  timeline_view_details: { en: 'View details', cs: 'Zobrazit detaily' },
+  timeline_total_time: { en: 'Total Time', cs: 'Celkový čas' },
+  timeline_no_activities: { en: 'No activities planned', cs: 'Žádné aktivity nejsou naplánovány' },
+  timeline_drop_here: { en: 'Drag and drop places here', cs: 'Přetáhněte místa sem' },
+  // Transport
+  transport_car: { en: 'Car', cs: 'Auto' },
+  transport_bus: { en: 'Bus', cs: 'Autobus' },
+  transport_walk: { en: 'Walk', cs: 'Chůze' },
+  transport_bike: { en: 'Bike', cs: 'Kolo' },
+  transport_live: { en: 'Live', cs: 'Živě' },
+  transport_departs: { en: 'Departs', cs: 'Odjíždí' },
+  // Intel
+  intel_title: { en: 'Trip Intel', cs: 'Přehled cesty' },
+  intel_overview: { en: 'Overview', cs: 'Přehled' },
+  intel_schedule: { en: 'Trip Schedule', cs: 'Rozvrh cesty' },
+  intel_phase: { en: 'Phase', cs: 'Fáze' },
+  intel_timestamp: { en: 'Timestamp', cs: 'Čas' },
+  intel_trip_start: { en: 'Trip Start', cs: 'Začátek cesty' },
+  intel_trip_end: { en: 'Trip End', cs: 'Konec cesty' },
+  intel_warning: { en: 'Check arrival times for local transport. Renting a car is mission-critical for Azores logistics.', cs: 'Zkontrolujte časy příjezdů pro místní dopravu. Pronájem auta je klíčový pro logistiku na Azorech.' },
+  intel_accommodations: { en: 'Accommodations', cs: 'Ubytování' },
+  intel_stay_badge: { en: 'STAY', cs: 'POBYT' },
+  intel_no_stays: { en: 'No stays identified.', cs: 'Žádné ubytování nebylo nalezeno.' },
+  intel_open_map: { en: 'Open Full Trip Map', cs: 'Otevřít celou mapu cesty' },
+  // App/TopBar
+  share_trip: { en: 'Share Trip', cs: 'Sdílet cestu' },
+  add_to_itinerary: { en: 'Add to Itinerary', cs: 'Přidat do itineráře' },
+  total_nights: { en: 'Total Nights', cs: 'Celkem nocí' },
+  total_budget: { en: 'Total Budget', cs: 'Celkové náklady' },
+  save_changes: { en: 'Save Changes', cs: 'Uložit změny' },
+  cancel: { en: 'Cancel', cs: 'Zrušit' },
+  back_to_list: { en: 'Back to list', cs: 'Zpět na seznam' },
+  price_per_night: { en: 'Price / Night', cs: 'Cena / Noc' },
+  total: { en: 'Total', cs: 'Celkem' },
+  find_stay: { en: 'Find Stay', cs: 'Najít ubytování' },
+  stays_list: { en: 'Stays List', cs: 'Seznam ubytování' },
+  stay_search_placeholder: { en: 'Accommodation name or address...', cs: 'Název ubytování nebo adresa...' },
+  // Landing
+  readiness: { en: 'Readiness', cs: 'Připravenost' },
+  target_destination: { en: 'Target Destination', cs: 'Cílová destinace' },
+  trip_timeframe: { en: 'Trip Timeframe', cs: 'Časové rozmezí' },
+  planning_strategy: { en: 'Planning Strategy', cs: 'Strategie plánování' },
+  strategy_full: { en: 'Full Itinerary', cs: 'Kompletní plán' },
+  strategy_suggestions: { en: 'Suggestions Only', cs: 'Jen inspirace' },
+  status_online: { en: 'Online', cs: 'Online' },
+  // Treasure Hunt
+  treasure_help_find: { en: 'Help Kaja & Pedro find their way!', cs: 'Pomozte Kajovi a Petrovi najít cestu!' },
+  treasure_found: { en: 'They made it!', cs: 'Zvládli to!' },
+  treasure_leaderboard: { en: 'Global Leaderboard', cs: 'Globální žebříček' },
+  treasure_play_again: { en: 'Play Again', cs: 'Hrát znovu' },
+  treasure_enter_name: { en: 'Enter your name', cs: 'Zadejte své jméno' },
+  treasure_save_score: { en: 'Save Score', cs: 'Uložit skóre' },
+  // Poi & Stays
+  poi_directions: { en: 'Directions', cs: 'Navigovat' },
+  poi_save_to_day: { en: 'Save to Day ', cs: 'Uložit do dne ' },
+  poi_book_online: { en: 'Book Online', cs: 'Rezervovat online' },
+  poi_duration_suffix: { en: ' duration', cs: ' trvání' },
+  poi_no_description: { en: 'No description available for this activity.', cs: 'Pro tuto aktivitu není k dispozici žádný popis.' },
+  stays_title: { en: 'Manage Stays', cs: 'Spravovat ubytování' },
+  stays_tab_search: { en: 'Search Hotels', cs: 'Hledat hotely' },
+  stays_tab_list: { en: 'My Stays', cs: 'Moje pobyty' },
+  stays_placeholder: { en: 'Search for hotels, villas, or apartments...', cs: 'Hledejte hotely, vily nebo apartmány...' },
+  stays_empty: { en: 'No stays added yet.', cs: 'Zatím nebylo přidáno žádné ubytování.' },
+  stays_add_btn: { en: 'Add to Trip', cs: 'Přidat do cesty' },
+  stays_checkin: { en: 'Check-in', cs: 'Příjezd' },
+  stays_checkout: { en: 'Check-out', cs: 'Odjezd' },
+  // Memories
+  memories_badge: { en: 'Our Memories', cs: 'Naše vzpomínky' },
+  memories_title_1: { en: 'Captured ', cs: 'Zachyťte ' },
+  memories_title_2: { en: 'Moments', cs: 'momentky' },
+  memories_google_photos: { en: 'View Google Photos Album', cs: 'Zobrazit album v Google Photos' },
+  memories_by: { en: 'By ', cs: 'Od ' },
+  memories_ai_enabled: { en: 'AI Image Generation enabled', cs: 'AI generování obrázků aktivní' },
+  memories_ai_desc: { en: 'I can generate group photos of Karel, Pedro, and Monika based on your itinerary highlights.', cs: 'Můžu vygenerovat skupinové fotky Karla, Pedra a Moniky na základě vašich zážitků.' },
+  celebrate: { en: 'CELEBRATE', cs: 'OSLAVIT' },
+  sidekick_woohoo: { en: 'Woohoo!', cs: 'Jupí!' },
+  itinerary_label: { en: 'Itinerary', cs: 'Itinerář' },
+  days_count: { en: 'Days', cs: 'Dnů' },
+  inspiration_title: { en: 'Trending Inspiration', cs: 'Trendy Inspirace' },
+  stays_btn: { en: 'Stays', cs: 'Ubytování' },
+  packing_btn: { en: 'Packing', cs: 'Balení' },
+  packing_ready: { en: '(Ready)', cs: '(Hotovo)' },
+  packing_in_progress: { en: '(In Progress)', cs: '(Probíhá)' },
+  atlas_title: { en: 'Atlas Library', cs: 'Knihovna Atlas' },
+  places_count: { en: 'places', cs: 'míst' },
+  search_places_title: { en: 'Search Places', cs: 'Hledat místa' },
+  search_placeholder_dest: { en: 'Search in', cs: 'Hledat v' },
+  search_visible_only: { en: 'Search within visible area only', cs: 'Hledat pouze ve viditelné oblasti' },
+  search_results_title: { en: 'Search Results', cs: 'Výsledky Vyhledávání' },
+  clear_search: { en: 'Clear', cs: 'Vymazat' },
+
+  // Chat
+  'chat_header_title': { en: 'Expedition Architect', cs: 'AI Architekt' },
+  'chat_ready_status': { en: 'Ready to Plan', cs: 'Připraven Plánovat' },
+  'chat_welcome_title': { en: 'Start your story...', cs: 'Kam se vydáme?' },
+  'chat_welcome_desc': { en: 'Describe your vibe. E.g. "Foodie trip to Tokyo in December for 2 people."', cs: 'Popište svou ideální cestu. Např: "V prosinci do Tokia pro dva, milujeme jídlo."' },
+  'chat_input_placeholder': { en: 'Describe your expedition...', cs: 'Napište sem...' },
+  'chat_launch_expedition': { en: 'Launch Expedition', cs: 'Spustit Výpravu' },
+
+  // Map
+  'map_offline': { en: 'Map Interface Offline', cs: 'Mapa je offline' },
+  'map_error': { en: 'The map encountered a glitch. Please try refreshing.', cs: 'V mapě došlo k chybě. Zkuste prosím stránku obnovit.' },
+  'map_recover': { en: 'Recover', cs: 'Obnovit' },
+  'map_duration': { en: 'min duration', cs: 'min trvání' },
+  'map_add_to_day': { en: 'Add to Day', cs: 'Přidat do dne' },
+  'map_in_day': { en: 'In Day', cs: 'V dni' },
+  'map_details': { en: 'Details', cs: 'Detaily' },
+  'map_open_google_maps': { en: 'Open in Google Maps', cs: 'Otevřít v Google Maps' },
+  'map_open_maps': { en: 'Open in Maps', cs: 'Otevřít v Mapách' },
 };
-
-
