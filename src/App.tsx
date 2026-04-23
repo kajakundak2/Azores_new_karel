@@ -12,7 +12,9 @@ import { useItineraryState, formatDuration, calcDayDuration, toLocalIso, syncSta
 import { DndContext, DragEndEvent, useDraggable, useDroppable, DragOverlay } from '@dnd-kit/core';
 import { GoogleGenAI } from '@google/genai';
 import { geminiKeyManager } from './utils/geminiKeyManager';
-import { parseItineraryDocument, generateItineraryFromScratch, ParsedDay } from './utils/itineraryParser';
+import { ensureBilingual, ensureBilingualAsync, translate } from './utils/bilingualUtils';
+import { aiTranslator } from './utils/aiTranslator';
+import { applyItineraryUpdate } from './utils/aiUpdateAgent';
 import { APIProvider } from '@vis.gl/react-google-maps';
 import { PoiDetailModal } from './components/PoiDetailModal';
 import { WeatherWidget } from './components/WeatherWidget';
@@ -136,7 +138,7 @@ const DraggablePoi = ({ poi, lang, onSelect, onHover, theme }: { poi: POI; lang:
 // ── Chat Message type ─────────────────────────────────────────────────────────
 interface ChatMessage {
   role: 'user' | 'model';
-  text: string;
+  text: string | BilingualString;
   uiCards?: POI[];
 }
 
@@ -432,9 +434,17 @@ If documents are provided, FAVOR places and descriptions from them. Use their st
     try {
       const text = await file.text();
       await addReferenceDoc({ name: file.name, content: text });
-      setNotification(`Uploaded ${file.name} to Sara's memory!`);
-      setMessages(prev => [...prev, { role: 'user', text: `[System: User uploaded reference document: ${file.name}]` }]);
-      setMessages(prev => [...prev, { role: 'model', text: `I've received "${file.name}". I'll use it as a reference for your itinerary!` }]);
+      setNotification(lang === 'cs' ? `Dokument ${file.name} nahrán do paměti Sáry!` : `Uploaded ${file.name} to Sara's memory!`);
+      const uploadUserMsg = {
+        en: `[System: User uploaded reference document: ${file.name}]`,
+        cs: `[Systém: Uživatel nahrál referenční dokument: ${file.name}]`
+      };
+      const uploadModelMsg = {
+        en: `I've received "${file.name}". I'll use it as a reference for your itinerary!`,
+        cs: `Přijala jsem "${file.name}". Použiji jej jako referenci pro váš itinerář!`
+      };
+      setMessages(prev => [...prev, { role: 'user', text: uploadUserMsg }]);
+      setMessages(prev => [...prev, { role: 'model', text: uploadModelMsg }]);
     } catch (err) {
       console.error(err);
       setNotification("Failed to read file.");
@@ -519,22 +529,24 @@ If documents are provided, FAVOR places and descriptions from them. Use their st
               await new Promise(r => setTimeout(r, 200));
             }
 
-            const fullDescription =
-              act.description + (act.practicalTips ? `\n\n💡 ${act.practicalTips}` : '');
+            const bTitle = await ensureBilingualAsync(act.title);
+            const bDesc = await ensureBilingualAsync(act.description);
+            const bTips = act.practicalTips ? await ensureBilingualAsync(act.practicalTips) : null;
+
+            const fullDescription = {
+              en: bDesc.en + (bTips ? `\n\n💡 ${bTips.en}` : ''),
+              cs: bDesc.cs + (bTips ? `\n\n💡 ${bTips.cs}` : '')
+            };
 
             const newActivity: POI = {
               id: `smartgen-${day.dayNumber}-${totalPois}-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-              title: { en: act.title, cs: act.title },
-              description: {
-                en: fullDescription,
-                cs: fullDescription
-              },
+              title: bTitle,
+              description: fullDescription,
               category: (act.category as Category) || 'Sightseeing',
               duration: act.duration || 60,
               cost: act.cost ? parseFloat(act.cost.replace(/[^0-9.,]/g, '').replace(',', '.')) || undefined : undefined,
               startTime: act.startTime || undefined,
-              // Prefer Google Places data, fall back to AI-parsed data
-              address: placeData?.address || act.address || act.title,
+              address: placeData?.address || act.address || (typeof act.title === 'string' ? act.title : act.title.en),
               imageUrl: placeData?.imageUrl
                 || (act.imageKeyword
                   ? `https://source.unsplash.com/800x600/?${encodeURIComponent(act.imageKeyword)}`
@@ -554,27 +566,59 @@ If documents are provided, FAVOR places and descriptions from them. Use their st
             addPoi(dayIso, {
               id: `daynotes-${day.dayNumber}-${Date.now()}`,
               title: { en: `📋 Day ${day.dayNumber} Tips`, cs: `📋 Tipy pro den ${day.dayNumber}` },
-              description: { en: day.dayNotes, cs: day.dayNotes },
+              description: await ensureBilingualAsync(day.dayNotes),
               category: 'Special' as Category,
               duration: 0,
             });
           }
         }
 
-        const msg = lang === 'cs'
-          ? `📝 Hotovo! ${totalPois} aktivit vygenerováno pro ${parsedDays.length} dní (${enrichedCount} obohaceno z Google Maps).`
-          : `📝 Done! ${totalPois} activities across ${parsedDays.length} days (${enrichedCount} enriched from Google Maps).`;
-        setNotification(msg);
-        setMessages(prev => [...prev, { role: 'model', text: msg }]);
+        const msgEn = `📝 Done! ${totalPois} activities across ${parsedDays.length} days (${enrichedCount} enriched from Google Maps).`;
+        const msgCs = `📝 Hotovo! ${totalPois} aktivit vygenerováno pro ${parsedDays.length} dní (${enrichedCount} obohaceno z Google Maps).`;
+        const bMsg = { en: msgEn, cs: msgCs };
+        
+        setNotification(lang === 'cs' ? msgCs : msgEn);
+        setMessages(prev => [...prev, { role: 'model', text: bMsg }]);
       }
     } catch (err: any) {
       console.error('SmartGeneration error:', err);
-      setNotification(`❌ ${err.message || 'Generation failed.'}`);
-      setMessages(prev => [...prev, { role: 'model', text: `❌ Error: ${err.message || 'Failed to generate itinerary.'}` }]);
+      const errMsg = `❌ ${err.message || 'Generation failed.'}`;
+      setNotification(errMsg);
+      const bError = await ensureBilingualAsync(errMsg);
+      setMessages(prev => [...prev, { role: 'model', text: bError }]);
     }
 
     setIsChatLoading(false);
   }, [activeTrip, lang, addPoi, setMessages]);
+
+  const handleItineraryUpdate = useCallback(async (request: string) => {
+    if (!activeTrip || !activeTripId) return;
+
+    setIsChatLoading(true);
+    setNotification(lang === 'cs' ? '🤖 Sára upravuje itinerář...' : '🤖 Sára is adjusting the itinerary...');
+
+    try {
+      const { updatedItinerary, summary } = await applyItineraryUpdate(
+        itinerary,
+        request,
+        activeTrip.destination,
+        (msg) => setNotification(`🤖 ${msg}`)
+      );
+
+      // Sync the entire updated itinerary to Firestore
+      await updateTrip(activeTripId, { itinerary: updatedItinerary });
+
+      const bMsg = await ensureBilingualAsync(summary);
+      setMessages(prev => [...prev, { role: 'model', text: bMsg }]);
+      setNotification(lang === 'cs' ? '✨ Itinerář aktualizován!' : '✨ Itinerary updated!');
+    } catch (err: any) {
+      console.error('Update error:', err);
+      const errMsg = await ensureBilingualAsync(`❌ Failed to update itinerary: ${err.message}`);
+      setMessages(prev => [...prev, { role: 'model', text: errMsg }]);
+    }
+
+    setIsChatLoading(false);
+  }, [activeTrip, activeTripId, itinerary, lang, updateTrip]);
 
 
 
@@ -657,7 +701,11 @@ If documents are provided, FAVOR places and descriptions from them. Use their st
           uiCards: m.uiCards
         })));
       } else {
-        setMessages([{ role: 'model', text: `Welcome to ${activeTrip.destination}! I'm Sára, your personal travel assistant. I've prepared some suggestions in the library. What kind of experiences are you looking for?` }]);
+        const welcomeMsg = {
+          en: `Welcome to ${activeTrip.destination}! I'm Sára, your personal travel assistant. I've prepared some suggestions in the library. What kind of experiences are you looking for?`,
+          cs: `Vítejte v destinaci ${activeTrip.destination}! Jsem Sára, vaše osobní asistentka pro cestování. Připravila jsem pro vás několik návrhů v knihovně. Jaké zážitky hledáte?`
+        };
+        setMessages([{ role: 'model', text: welcomeMsg }]);
       }
       
       // Check for auto-generation flag from LandingPage
@@ -703,35 +751,59 @@ If documents are provided, FAVOR places and descriptions from them. Use their st
   // Route stats
   const activeDayDuration = calcDayDuration(activeDayItems);
 
-  // DnD handlers (Phase 2)
+
+  // ── Library & DnD Logic ──────────────────────────────────────────────────
+  const libraryTabs = ['All', 'Sightseeing', 'Activity', 'Food', 'Transport', 'Special'];
+  const allAvailablePois = customPois;
+  
+  const filteredPois = useMemo(() => {
+    let list = allAvailablePois;
+    if (activeTab !== 'All') {
+      list = list.filter(p => p.category === activeTab);
+    }
+    if (atlasQuery.trim()) {
+      const q = atlasQuery.toLowerCase();
+      list = list.filter(p => 
+        p.title.en.toLowerCase().includes(q) || 
+        (p.title.cs && p.title.cs.toLowerCase().includes(q)) ||
+        (p.description?.en && p.description.en.toLowerCase().includes(q))
+      );
+    }
+    return list;
+  }, [allAvailablePois, activeTab, atlasQuery]);
+
   const handleDragStart = (event: any) => {
-    setActiveId(event.active.id as string);
-    setActiveDragData(event.active.data.current as POI);
+    const { active } = event;
+    setActiveId(active.id as string);
+    setActiveDragData(active.data.current as POI);
   };
 
-  const handleDragEnd = (event: DragEndEvent) => {
+  const handleDragEnd = async (event: any) => {
     const { active, over } = event;
-    if (over && active.data.current) {
-      const poi = active.data.current as POI;
-      const dayIso = over.id as string;
-      addPoi(dayIso, poi);
-    }
     setActiveId(null);
     setActiveDragData(null);
+
+    if (over && over.id && active.data.current) {
+      const dayIso = over.id as string;
+      const poi = active.data.current as POI;
+      
+      const newPoi = {
+        ...poi,
+        id: `${poi.id}-${Date.now()}`,
+      };
+      
+      await addPoi(dayIso, newPoi);
+      setNotification(t('notification_added'));
+    }
   };
 
-  // Library filter
-  const libraryTabs = ['All', 'Sightseeing', 'Activity', 'Food', 'City'];
-  const allAvailablePois = useMemo(() => [...(activeTrip?.libraryPois || []), ...customPois], [customPois, activeTrip?.libraryPois]);
-  const filteredPois = activeTab === 'All' ? allAvailablePois : allAvailablePois.filter(p => p.category === activeTab);
-
-
-  // Gemini chat handler — uses @google/genai v1.x SDK (ai.models.generateContent)
+  // ── Gemini Chat Handler — uses @google/genai v1.x SDK ───────────────────
   const handleSendMessage = useCallback(async () => {
     const text = chatInput.trim();
     if (!text || isChatLoading) return;
 
-    setMessages(prev => [...prev, { role: 'user', text }]);
+    const bilingualUserText = await ensureBilingualAsync(text);
+    setMessages(prev => [...prev, { role: 'user', text: bilingualUserText }]);
     setChatInput('');
     setIsChatLoading(true);
 
@@ -740,7 +812,7 @@ If documents are provided, FAVOR places and descriptions from them. Use their st
       if (!apiKey) {
         setMessages(prev => [...prev, {
           role: 'model',
-          text: '⚠️ No Gemini API keys available.',
+          text: { en: '⚠️ No Gemini API keys available.', cs: '⚠️ Nejsou k dispozici žádné klíče Gemini API.' },
         }]);
         return;
       }
@@ -765,15 +837,17 @@ If documents are provided, FAVOR places and descriptions from them. Use their st
       - BE FRIENDLY: Adopt a collaborative and inviting tone.
       - ADDRESSING USER: Address the user sparingly as "Traveler" or not at all.
       - VISUAL PRIORITY: Suggest visually stunning spots and viral viewpoints perfect for memories.
-      - RULES:
       - Always use searchGooglePlaces for real recommendations.
       - Be enthusiastic and precise. All costs in €.
       - Keep responses conversational.
-      - SMART PLANNING: If the user uploads a document, mentions a file, or asks to plan the WHOLE trip / all days at once, call trigger_smart_itinerary_generation instead of generateFullItinerary.`;
+      - SMART PLANNING: 
+         - If the user asks for a WHOLE NEW trip, call trigger_smart_itinerary_generation.
+         - If the user asks for COMPLEX CHANGES (e.g. "move everything one day later", "replan the first half", "remove all hikes and add museums"), call update_itinerary.
+         - For small single additions/removals, you can still use generateFullItinerary or remove_from_itinerary.`;
 
       const contents = messages
-        .map(m => ({ role: m.role === 'model' ? 'model' : 'user', parts: [{ text: m.text }] }))
-        .concat({ role: 'user', parts: [{ text }] });
+        .map(m => ({ role: m.role === 'model' ? 'model' : 'user', parts: [{ text: typeof m.text === 'string' ? m.text : m.text.en }] }))
+        .concat({ role: 'user', parts: [{ text: bilingualUserText.en }] });
 
       const result = await ai.models.generateContent({
         model: 'gemini-3.1-flash-lite-preview',
@@ -854,6 +928,17 @@ If documents are provided, FAVOR places and descriptions from them. Use their st
                   type: 'OBJECT',
                   properties: {}
                 } as any
+              },
+              {
+                name: 'update_itinerary',
+                description: 'Update, modify, or replan large portions of the itinerary. Use this for complex requests like shifting days, removing multiple items, or changing themes.',
+                parameters: {
+                  type: 'OBJECT',
+                  properties: {
+                    request: { type: 'STRING', description: 'The specific update request from the user.' }
+                  },
+                  required: ['request']
+                } as any
               }
             ]
           }]
@@ -862,7 +947,7 @@ If documents are provided, FAVOR places and descriptions from them. Use their st
 
       if (result.functionCalls && result.functionCalls.length > 0) {
         const fc = result.functionCalls[0];
-        let replyText = 'Searching...';
+        let rawReply = 'Searching...';
         let uiCards: POI[] | undefined;
 
         if (fc.name === 'searchGooglePlaces') {
@@ -870,13 +955,13 @@ If documents are provided, FAVOR places and descriptions from them. Use their st
           try {
             const places = await searchPlacesAsync(query);
             if (places.length > 0) {
-              replyText = `I found ${places.length} great ${places.length === 1 ? 'match' : 'matches'} for "${query}". Here are the results:`;
+              rawReply = `I found ${places.length} great ${places.length === 1 ? 'match' : 'matches'} for "${query}". Here are the results:`;
               uiCards = places.slice(0, 5);
             } else {
-              replyText = `I couldn't find any places matching "${query}". Try a different search term.`;
+              rawReply = `I couldn't find any places matching "${query}". Try a different search term.`;
             }
           } catch {
-            replyText = `I found a match for "${query}":`;
+            rawReply = `I found a match for "${query}":`;
             uiCards = [{
               id: 'search-' + Date.now(),
               title: { en: query, cs: query },
@@ -891,17 +976,17 @@ If documents are provided, FAVOR places and descriptions from them. Use their st
           try {
             const places = await searchPlacesAsync(`${desc} in ${dest}`);
             if (places.length > 0) {
-              replyText = `Here's a ${desc} plan with ${Math.min(places.length, num)} activities. Drag them to your timeline or click + to add:`;
+              rawReply = `Here's a ${desc} plan with ${Math.min(places.length, num)} activities. Drag them to your timeline or click + to add:`;
               uiCards = places.slice(0, num);
             } else {
-              replyText = `I couldn't find specific places for "${desc}" in ${dest}. Try being more specific.`;
+              rawReply = `I couldn't find specific places for "${desc}" in ${dest}. Try being more specific.`;
             }
           } catch {
-            replyText = `I planned a "${desc}" day but couldn't fetch live data. Try searching manually in the Atlas.`;
+            rawReply = `I planned a "${desc}" day but couldn't fetch live data. Try searching manually in the Atlas.`;
           }
         } else if (fc.name === 'searchFlights') {
           const { origin, date } = fc.args as any;
-          replyText = `Here are flight options from ${origin} to ${dest} on ${date}. Note: For real-time pricing, check Google Flights or Skyscanner.`;
+          rawReply = `Here are flight options from ${origin} to ${dest} on ${date}. Note: For real-time pricing, check Google Flights or Skyscanner.`;
           uiCards = [{
              id: 'flight-' + Date.now(),
              title: { en: `${origin} ✈️ ${dest}`, cs: `${origin} ✈️ ${dest}` },
@@ -913,30 +998,38 @@ If documents are provided, FAVOR places and descriptions from them. Use their st
         } else if (fc.name === 'remove_from_itinerary') {
           const { dayIso, poiId } = fc.args as any;
           removePoi(dayIso, poiId);
-          replyText = `Okay, I've removed that activity from the trip plan.`;
+          rawReply = `Okay, I've removed that activity from the trip plan.`;
         } else if (fc.name === 'trigger_smart_itinerary_generation') {
           const intensity = (fc.args as any)?.intensity || 'balanced';
-          setMessages(prev => [...prev, { role: 'model', text: t('notification_smart') }]);
+          const notificationText = await ensureBilingualAsync(t('notification_smart'));
+          setMessages(prev => [...prev, { role: 'model', text: notificationText }]);
           setIsChatLoading(false);
           handleSmartGeneration(intensity);
           return;
         } else if (fc.name === 'clear_day') {
           const { dayIso } = fc.args as any;
           await clearDay(dayIso);
-          replyText = `I have cleared the activities for that day.`;
+          rawReply = `I have cleared the activities for that day.`;
         } else if (fc.name === 'clear_itinerary') {
           await clearItinerary();
-          replyText = `I have cleared the entire itinerary as requested.`;
+          rawReply = `I have cleared the entire itinerary as requested.`;
+        } else if (fc.name === 'update_itinerary') {
+          const { request } = fc.args as any;
+          handleItineraryUpdate(request);
+          return; // handleItineraryUpdate handles the model reply
         }
 
+        const replyText = await ensureBilingualAsync(rawReply);
         setMessages(prev => [...prev, { role: 'model', text: replyText, uiCards }]);
       } else {
         const reply = result.text ?? "I'm ready to help with your trip!";
-        setMessages(prev => [...prev, { role: 'model', text: reply }]);
+        const translatedReply = await ensureBilingualAsync(reply);
+        setMessages(prev => [...prev, { role: 'model', text: translatedReply }]);
       }
     } catch (err: any) {
       console.error('AI Error:', err);
-      setMessages(prev => [...prev, { role: 'model', text: `❌ Error: ${err.message || 'Something went wrong.'}` }]);
+      const errorMsg = await ensureBilingualAsync(`❌ Error: ${err.message || 'Something went wrong.'}`);
+      setMessages(prev => [...prev, { role: 'model', text: errorMsg }]);
     } finally {
       setIsChatLoading(false);
     }
@@ -952,19 +1045,20 @@ If documents are provided, FAVOR places and descriptions from them. Use their st
       setMessages(prev => {
         const last = prev[prev.length - 1];
         if (last && last.role === 'model' && !last.uiCards) {
-          return [...prev.slice(0, -1), { ...last, text: last.text + text }];
+          const currentText = typeof last.text === 'string' ? last.text : (lang === 'cs' ? last.text.cs : last.text.en);
+          const newText = currentText + text;
+          return [...prev.slice(0, -1), { ...last, text: { en: newText, cs: newText } }];
         }
-        return [...prev, { role: 'model', text }];
+        return [...prev, { role: 'model', text: { en: text, cs: text } }];
       });
     },
     onUserMessage: (text) => {
       setMessages(prev => {
         const last = prev[prev.length - 1];
         if (last && last.role === 'user') {
-          const newMessages = [...prev.slice(0, -1), { ...last, text }];
-          return newMessages;
+          return [...prev.slice(0, -1), { ...last, text: { en: text, cs: text } }];
         }
-        return [...prev, { role: 'user', text }];
+        return [...prev, { role: 'user', text: { en: text, cs: text } }];
       });
     },
     onUpdateItinerary: async (data: any) => {
@@ -979,10 +1073,13 @@ If documents are provided, FAVOR places and descriptions from them. Use their st
       const targetDate = new Date(startAt);
       targetDate.setDate(startAt.getDate() + (data.day - 1));
       const dayIso = toLocalIso(targetDate);
+      const bActivity = await ensureBilingualAsync(data.activity);
+      const bDescription = data.description ? await ensureBilingualAsync(data.description) : { en: 'Added by Sára.', cs: 'Přidáno Sárou.' };
+      
       let newActivity: POI = {
         id: 'voice-' + Date.now() + '-' + Math.random().toString(36).substr(2, 4),
-        title: { en: data.activity, cs: data.activity },
-        description: data.description ? { en: data.description, cs: data.description } : { en: 'Added by Sára.', cs: 'Přidáno Sárou.' },
+        title: bActivity,
+        description: bDescription,
         category: (data.category as Category) || 'Sightseeing',
         duration: 60,
         imageUrl: `https://images.unsplash.com/photo-1540206351-d6465b3ac5c1?auto=format&fit=crop&w=800&q=80`,
@@ -998,7 +1095,8 @@ If documents are provided, FAVOR places and descriptions from them. Use their st
       } catch (err) { console.warn('Failed to enrich voice activity:', err); }
       try {
         await addPoi(dayIso, newActivity);
-        setNotification(`Sára: Added "${data.activity}" to Day ${data.day}`);
+        const notificationMsg = await ensureBilingualAsync(`Added "${data.activity}" to Day ${data.day}`);
+        setNotification(`Sára: ${translate(notificationMsg, lang)}`);
       } catch (err: any) {
         setNotification(`❌ Error adding to itinerary: ${err.message || 'Firestore call failed'}`);
         throw err;
@@ -1046,10 +1144,16 @@ If documents are provided, FAVOR places and descriptions from them. Use their st
       handleSmartGeneration(intensity);
     },
     onShowUICard: (card) => {
-      setMessages(prev => [...prev, { role: 'model', text: 'Here is what I found for you:', uiCards: [card] }]);
+      const msg = {
+        en: 'Here is what I found for you:',
+        cs: 'Tady je, co jsem pro vás našla:'
+      };
+      setMessages(prev => [...prev, { role: 'model', text: msg, uiCards: [card] }]);
     },
     onUploadDoc: handleFileUpload
   });
+
+
 
   // Sára's high-fidelity state machine (synced with landing page)
   const saraState = useSaraState({
@@ -1153,7 +1257,7 @@ If documents are provided, FAVOR places and descriptions from them. Use their st
                 {messages.map((msg, i) => (
                     <div key={i} className={`flex flex-col gap-2 ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
                       <div className={`max-w-[90%] px-4 py-3 rounded-2xl text-xs leading-relaxed shadow-sm ${msg.role === 'user' ? 'bg-emerald-500 text-slate-950 font-black rounded-br-sm shadow-emerald-500/20' : (theme === 'dark' ? 'bg-white/10 text-white rounded-bl-sm border border-white/10' : 'bg-white text-slate-900 rounded-bl-sm border border-slate-200 shadow-sm')}`}>
-                        {msg.text}
+                        {translate(msg.text, lang)}
                       </div>
                       {msg.uiCards?.map(card => (
                         <div key={card.id} className={`w-[90%] border border-emerald-500/30 p-2 rounded-xl flex items-center gap-3 shadow-xl relative overflow-hidden group ml-2 mb-2 ${theme === 'dark' ? 'bg-slate-900' : 'bg-white'}`}>

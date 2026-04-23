@@ -21,6 +21,13 @@
       ]
     },
     "allowImportingTsExtensions": true,
+    "types": [
+      "vite/client",
+      "google.maps"
+    ],
     "noEmit": true
-  }
+  },
+  "exclude": [
+    "gemini-live-api-examples"
+  ]
 }

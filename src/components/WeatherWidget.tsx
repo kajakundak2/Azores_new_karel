@@ -299,8 +299,8 @@ function WeatherDetailModal({ day, onClose, isHistorical, theme, lang }: { day: 
            </h4>
            
            <div className="space-y-2 h-64 overflow-y-auto pr-2 scrollbar-hide">
-              {day.hourly?.time.map((t, idx) => {
-                const hour = new Date(t).getHours();
+              {day.hourly?.time.map((hourlyTime, idx) => {
+                const hour = new Date(hourlyTime).getHours();
                 if (hour % 2 !== 0) return null;
                 const hCode = day.hourly?.weatherCode?.[idx] ?? 0;
                 const hCondition = getWeatherCondition(hCode);

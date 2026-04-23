@@ -12,7 +12,7 @@ class GeminiKeyManager {
 
   constructor() {
     // Collect all available keys from .env
-    const env = (import.meta as any).env;
+    const env = import.meta.env;
     const key1 = env.VITE_GEMINI_API_KEY_1;
     const key2 = env.VITE_GEMINI_API_KEY_2;
     const key3 = env.VITE_GEMINI_API_KEY_3;
