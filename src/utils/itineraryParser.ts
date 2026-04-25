@@ -66,7 +66,8 @@ export type ProgressCallback = (message: string) => void;
  */
 export async function splitDocument(
   documentText: string,
-  onProgress?: ProgressCallback
+  onProgress?: ProgressCallback,
+  targetDayNumbers?: number[]
 ): Promise<SplitterResult> {
   onProgress?.('Analyzing document structure...');
 
@@ -120,16 +121,22 @@ CRITICAL: The rawText must contain the COMPLETE text for each day. Do NOT summar
 
       let text = result.text || '';
       text = stripCodeFences(text);
-      const parsed = JSON.parse(text.trim());
+      const parsed = JSON.parse(text.trim()) as SplitterResult;
       
+      // Filter if targetDayNumbers provided
+      if (targetDayNumbers && targetDayNumbers.length > 0) {
+        parsed.dayChunks = parsed.dayChunks.filter(c => targetDayNumbers.includes(c.dayNumber));
+      }
+
       onProgress?.(`Found ${parsed.totalDays} days in document.`);
-      return parsed as SplitterResult;
+      return parsed;
     } catch (err: any) {
       console.error('Splitter error:', err);
-      if (err.message?.includes('429') || err.message?.includes('503')) {
+      if (err.message?.includes('429') || err.message?.includes('503') || err.message?.includes('fetch failed')) {
         geminiKeyManager.markKeyFailed(apiKey, true, 30); // 30s cooldown on quotas/503
         retryCount++;
-        await delay(1500);
+        const backoff = 2000 * Math.pow(2, retryCount) + Math.random() * 1000;
+        await delay(backoff);
       } else {
         retryCount++;
         await delay(1000);
@@ -235,10 +242,11 @@ Return ONLY valid JSON (no markdown code blocks):
       return parsed as ParsedDay;
     } catch (err: any) {
       console.error(`Worker error (Day ${dayChunk.dayNumber}):`, err);
-      if (err.message?.includes('429') || err.message?.includes('503')) {
+      if (err.message?.includes('429') || err.message?.includes('503') || err.message?.includes('fetch failed')) {
         geminiKeyManager.markKeyFailed(apiKey, true, 30);
         retryCount++;
-        await delay(2000);
+        const backoff = 2000 * Math.pow(2, retryCount) + Math.random() * 1000;
+        await delay(backoff);
       } else {
         retryCount++;
         await delay(1000);
@@ -265,10 +273,11 @@ export async function parseItineraryDocument(
   documentText: string,
   destination: string,
   travelers: number,
-  onProgress?: ProgressCallback
+  onProgress?: ProgressCallback,
+  targetDayNumbers?: number[]
 ): Promise<ParsedDay[]> {
   // Step A: Split the document
-  const structure = await splitDocument(documentText, onProgress);
+  const structure = await splitDocument(documentText, onProgress, targetDayNumbers);
   
   // Step B+C: Process each day sequentially (to avoid 429 bursts)
   const results: ParsedDay[] = [];
@@ -283,9 +292,9 @@ export async function parseItineraryDocument(
     );
     results.push(dayResult);
     
-    // Small delay between days to be kind to rate limits
+    // Increased delay between days to be kind to rate limits
     if (structure.dayChunks.indexOf(chunk) < structure.dayChunks.length - 1) {
-      await delay(500);
+      await delay(1000);
     }
   }
 
@@ -305,7 +314,8 @@ export async function generateItineraryFromScratch(
   travelers: number,
   intensity: string,
   referenceContext: string,
-  onProgress?: ProgressCallback
+  onProgress?: ProgressCallback,
+  targetDayNumbers?: number[]
 ): Promise<ParsedDay[]> {
   const start = new Date(startDate);
   const end = new Date(endDate);
@@ -348,6 +358,11 @@ Day 1: [Theme]
   const results: ParsedDay[] = [];
 
   for (let dayNum = 1; dayNum <= totalDays; dayNum++) {
+    // If specific target days are requested, skip others
+    if (targetDayNumbers && targetDayNumbers.length > 0 && !targetDayNumbers.includes(dayNum)) {
+      continue;
+    }
+
     onProgress?.(`Phase 2: Planning Day ${dayNum} of ${totalDays}...`);
 
     let retryCount = 0;
@@ -444,9 +459,9 @@ Return ONLY valid JSON (no markdown code blocks):
       });
     }
 
-    // Small delay between days
+    // Increased delay between days
     if (dayNum < totalDays) {
-      await delay(500);
+      await delay(1000);
     }
   }
 

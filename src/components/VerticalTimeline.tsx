@@ -235,7 +235,6 @@ export const VerticalTimelineDay = ({
   const t = (key: string) => TEXTS[key]?.[lang] || key;
   const iso = toLocalIso(date);
   const { isOver, setNodeRef } = useDroppable({ id: iso });
-  const isBirthday = iso === '2026-07-12';
 
   const dayStr = date.toLocaleDateString(lang === 'en' ? 'en-US' : 'cs-CZ', { weekday: 'short' });
   const dateStr = date.toLocaleDateString(lang === 'en' ? 'en-US' : 'cs-CZ', { month: 'short', day: 'numeric' });
@@ -244,36 +243,19 @@ export const VerticalTimelineDay = ({
   return (
     <div
       ref={setNodeRef}
-      className={`p-6 backdrop-blur-3xl border-2 rounded-[2.5rem] transition-all flex flex-col ${isBirthday
-        ? (theme === 'dark' ? 'bg-gradient-to-b from-orange-900/20 to-transparent border-orange-500/20' : 'bg-gradient-to-b from-orange-50 to-transparent border-orange-200')
-        : (theme === 'dark' ? 'bg-zinc-950/60 border-white/5 shadow-none' : 'bg-white border-slate-200/60 shadow-xl shadow-slate-200/20')
+      className={`p-6 backdrop-blur-3xl border-2 rounded-[2.5rem] transition-all flex flex-col ${
+        theme === 'dark' ? 'bg-zinc-950/60 border-white/5 shadow-none' : 'bg-white border-slate-200/60 shadow-xl shadow-slate-200/20'
         } ${isOver ? 'border-emerald-500 bg-emerald-500/5 scale-[1.01] shadow-2xl' : ''}`}
     >
       {/* Header */}
       <div className="flex items-center justify-between mb-8 pb-4 border-b border-slate-100 dark:border-white/5 text-left">
         <div className="space-y-1">
-          <span className={`text-[10px] font-black uppercase tracking-[0.2em] ${isBirthday ? 'text-orange-500' : 'text-emerald-500 dark:text-emerald-400/80'}`}>
+          <span className="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-500 dark:text-emerald-400/80">
             {dayStr}
           </span>
           <h3 className={`text-3xl font-black tracking-tighter leading-none transition-colors duration-500 ${theme === 'dark' ? 'text-white' : 'text-slate-950'}`}>
             {dateStr}
           </h3>
-          {isBirthday && (
-             <div 
-               className="mt-3 flex items-center gap-2 cursor-pointer group/bday-tag"
-               onClick={() => {
-                 confetti({
-                   particleCount: 150,
-                   spread: 70,
-                   origin: { y: 0.6 },
-                   colors: ['#f97316', '#fb923c', '#fdba74', '#ffffff']
-                 });
-               }}
-             >
-               <span className="text-[10px] text-orange-400 font-black uppercase tracking-widest italic group-hover/bday-tag:text-orange-500 transition-colors">Pedro & Karel's Birthday! 🎂</span>
-               <div className="px-2 py-0.5 bg-orange-500 text-white text-[8px] font-black rounded-full opacity-0 group-hover/bday-tag:opacity-100 transition-opacity">{t('celebrate')}</div>
-             </div>
-          )}
         </div>
         <div className="flex items-center gap-4">
           <WeatherWidget 

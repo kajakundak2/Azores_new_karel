@@ -32,7 +32,9 @@ export async function applyItineraryUpdate(
     You are a travel coordinator. Analyze the user request and the current itinerary.
     Identify which days (dates) need to be modified, added, or removed.
     
-    Current Itinerary (Dates): ${Object.keys(currentItinerary).join(', ')}
+    Current Itinerary Summary:
+    ${Object.entries(currentItinerary).map(([date, pois]) => `- ${date}: ${pois.map(p => ensureBilingual(p.title as any).en).join(', ') || 'Empty'}`).join('\n')}
+    
     User Request: "${updateRequest}"
     
     Return JSON:

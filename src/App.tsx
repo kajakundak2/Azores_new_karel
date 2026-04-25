@@ -26,6 +26,7 @@ import { LandingPage } from './components/LandingPage';
 // Removed ExpeditionIntel import
 import { db } from './firebase';
 import { downloadKML, generateGoogleMapsDirectionsUrl } from './utils/kmlExport';
+import { parseItineraryDocument, generateItineraryFromScratch, ParsedDay, BilingualString } from './utils/itineraryParser';
 import { VerticalTimelineDay } from './components/VerticalTimeline';
 import { SaraAssistant } from './components/characters/SaraAssistant';
 import { PackingChecklist } from './components/characters/PackingChecklist';
@@ -310,6 +311,33 @@ export default function App() {
 
   const t = (key: string) => TEXTS[key]?.[lang] || key;
 
+  /**
+   * Generates a rich context object for the AI models, 
+   * including trip details, participants, and current itinerary state.
+   */
+  const generatePromptContext = useCallback(() => {
+    if (!activeTrip) return "No active trip.";
+    
+    // Attempt to get context from hook
+    const itinerarySummary = getJsonContext?.() || "{}";
+    const referenceDocs = activeTrip.referenceDocs?.map(d => `- ${d.name}: ${d.content.substring(0, 5000)}...`).join('\n') || "None";
+    
+    return `
+=== CURRENT TRIP CONTEXT ===
+DESTINATION: ${activeTrip.destination}
+DATES: ${activeTrip.startDate} to ${activeTrip.endDate} (ISO format)
+PARTICIPANTS: ${activeTrip.travelers} people (${activeTrip.adults || activeTrip.travelers} adults, ${activeTrip.kids || 0} kids)
+${activeTrip.kidsAges ? `KIDS AGES: ${activeTrip.kidsAges.join(', ')}` : ''}
+
+REFERENCE DOCUMENTS UPLOADED:
+${referenceDocs}
+
+CURRENT ITINERARY STATE (JSON):
+${itinerarySummary}
+============================
+`;
+  }, [activeTrip, getJsonContext]);
+
   const [selectedPoi, setSelectedPoi] = useState<POI | null>(null);
   const [isLibraryOpen, setIsLibraryOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<string>('All');
@@ -390,15 +418,14 @@ export default function App() {
   const liveSystemInstruction = useMemo(() => {
     if (!activeTrip) return 'You are "Sára," an intelligent travel assistant. Keep answers friendly and helpful.';
     
-    // Get last 5 relevant messages for context
+    // Get last few messages for awareness of immediate history
     const recentChatContext = messages.slice(-5).map(m => 
-      `${m.role === 'user' ? 'Traveler' : 'Sára'}: ${m.text}`
+      `${m.role === 'user' ? 'Traveler' : 'Sára'}: ${typeof m.text === 'string' ? m.text : (lang === 'cs' ? m.text.cs : m.text.en)}`
     ).join('\n');
 
-    return `You are "Sára," the intelligent real-time travel assistant for the trip: ${activeTrip.title}.
-DESTINATION: ${activeTrip.destination}
-DATES: ${activeTrip.startDate} to ${activeTrip.endDate}
-TRAVELERS: ${activeTrip.travelers} people (${activeTrip.adults || activeTrip.travelers} adults${activeTrip.kids ? `, ${activeTrip.kids} children (ages: ${activeTrip.kidsAges?.join(', ') || 'unknown'})` : ''}).
+    return `You are "Sára," the intelligent real-time conversational assistant for this trip.
+    
+${generatePromptContext()}
 
 Your goal is to provide helpful, conversational travel advice. 
 Be friendly and collaborative. Address the user sparingly as "Traveler" or not at all.
@@ -406,34 +433,24 @@ MULTILINGUAL: Always respond in the same language as the user speaks to you. If 
 
 ${recentChatContext ? `RECENT CONVERSATION HISTORY:\n${recentChatContext}\n` : ''}
 
-DETAILED PLANNING:
-If the user asks for a "detailed plan," "full itinerary," "to plan everything," or mentions they want more than one activity per day:
-- YOU MUST CALL the "trigger_smart_itinerary_generation" tool.
-- This tool handles multiple days, logical routing, and food stops automatically.
-- After calling it, tell the user you are working on a dense, optimized plan and it will appear in a moment.
+DETAILED PLANNING & REGENERATION:
+- If the user asks for a "detailed plan," "full itinerary," "to plan everything," or mentions they want more than one activity per day: CALL "trigger_smart_itinerary_generation".
+- IMPORTANT: If the user wants to RE-PLAN or CHANGE specific days (e.g., "změň mi 3. den", "regeneruj sobotu"), you can pass "dayNumbers" array (e.g. [3]) to "trigger_smart_itinerary_generation".
+- After calling it, tell the user you are working on it.
 
 SINGLE MODIFICATIONS:
 - For adding a single place, use "add_to_itinerary".
 - For searching, use "searchGooglePlaces".
 
 Confirm actions briefly: "Ok, už na tom pracuji..." or "Přidávám [Místo]."
-Costs in local currency (default to € if unsure).
-
-REFERENCE DOCUMENTS:
-${activeTrip?.referenceDocs?.map(d => `---
-DOCUMENT: ${d.name}
-CONTENT: 
-${d.content}
----`).join('\n') || 'No additional reference documents provided.'}
-
-If documents are provided, FAVOR places and descriptions from them. Use their structure and timing if applicable.`;
-  }, [activeTrip, messages]);
+`;
+  }, [activeTrip, messages, generatePromptContext, lang]);
 
   const handleFileUpload = async (file: File) => {
     if (!activeTripId) return;
     try {
-      const text = await file.text();
-      await addReferenceDoc({ name: file.name, content: text });
+      const { name, content } = await file.text().then(txt => ({ name: file.name, content: txt }));
+      await addReferenceDoc({ name, content });
       setNotification(lang === 'cs' ? `Dokument ${file.name} nahrán do paměti Sáry!` : `Uploaded ${file.name} to Sara's memory!`);
       const uploadUserMsg = {
         en: `[System: User uploaded reference document: ${file.name}]`,
@@ -449,12 +466,14 @@ If documents are provided, FAVOR places and descriptions from them. Use their st
       console.error(err);
       setNotification("Failed to read file.");
     }
+    setIsSpeaking(false);
   };
 
-  const handleSmartGeneration = useCallback(async (intensity: string = 'balanced') => {
+  const handleSmartGeneration = useCallback(async (intensity: string = 'balanced', targetDayNumbers?: number[]) => {
     if (!activeTrip) return;
     
-    setNotification(t('notification_planning'));
+    const isPartial = targetDayNumbers && targetDayNumbers.length > 0;
+    setNotification(isPartial ? `🤖 Regenerating Day(s) ${targetDayNumbers.join(', ')}...` : t('notification_planning'));
     setIsChatLoading(true);
 
     const onProgress = (msg: string) => {
@@ -474,7 +493,8 @@ If documents are provided, FAVOR places and descriptions from them. Use their st
           fullDocText,
           activeTrip.destination,
           activeTrip.travelers,
-          onProgress
+          onProgress,
+          targetDayNumbers
         );
       } else {
         // ── SCRATCH: Generate per-day using the same chunked architecture ──
@@ -487,7 +507,8 @@ If documents are provided, FAVOR places and descriptions from them. Use their st
           activeTrip.travelers,
           intensity,
           referenceContext,
-          onProgress
+          onProgress,
+          targetDayNumbers
         );
       }
 
@@ -504,6 +525,9 @@ If documents are provided, FAVOR places and descriptions from them. Use their st
           startAt.setHours(0, 0, 0, 0);
           startAt.setDate(startAt.getDate() + (day.dayNumber - 1));
           const dayIso = toLocalIso(startAt);
+          
+          // Clear existing activities for this day before adding new ones
+          await clearDay(dayIso);
 
           onProgress(lang === 'cs'
             ? `Den ${day.dayNumber}: Hledám ${day.activities.length} míst na mapě...`
@@ -818,21 +842,15 @@ If documents are provided, FAVOR places and descriptions from them. Use their st
       }
 
       const ai = new GoogleGenAI({ apiKey });
-      const itineraryContext = getJsonContext();
       const dest = activeTrip?.destination || 'Unknown Destination';
       const tripTitle = activeTrip?.title || 'Trip';
       const tripDates = activeTrip ? `${activeTrip.startDate} to ${activeTrip.endDate}` : 'TBD';
       const numTravelers = activeTrip?.travelers || 1;
 
-      const systemInstruction = `You are "Sára," the intelligent travel planning assistant for "${tripTitle}".
+      const itineraryContext = generatePromptContext();
+      const systemInstruction = `You are "Sára," an intelligent travel assistant helping with the trip "${tripTitle}" to ${dest}.
       
-      TRIP CONTEXT:
-      - Destination: ${dest}
-      - Dates: ${tripDates}
-      - Travelers: ${numTravelers}
-      
-      Current Itinerary State:
-      ${itineraryContext}
+${itineraryContext}
       
       - BE FRIENDLY: Adopt a collaborative and inviting tone.
       - ADDRESSING USER: Address the user sparingly as "Traveler" or not at all.
@@ -902,11 +920,12 @@ If documents are provided, FAVOR places and descriptions from them. Use their st
               },
               {
                 name: 'trigger_smart_itinerary_generation',
-                description: 'Generate a complete, detailed day-by-day itinerary for ALL days of the trip. Use this when the user asks to plan the whole trip, plan it all, use the uploaded document, or plan it as in the file.',
+                description: 'Generate or Re-generate a complete detailed day-by-day itinerary. Can target specific days if dayNumbers is provided.',
                 parameters: {
                   type: 'OBJECT',
                   properties: {
-                    intensity: { type: 'STRING', enum: ['relaxed', 'balanced', 'packed'], description: 'The pace of the trip.' }
+                    intensity: { type: 'STRING', enum: ['relaxed', 'balanced', 'packed'], description: 'The pace of the trip.' },
+                    dayNumbers: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'Specific day numbers to regenerate (1-based), e.g. [3, 4]. Leave empty for full trip.' }
                   }
                 } as any
               },
@@ -1001,10 +1020,16 @@ If documents are provided, FAVOR places and descriptions from them. Use their st
           rawReply = `Okay, I've removed that activity from the trip plan.`;
         } else if (fc.name === 'trigger_smart_itinerary_generation') {
           const intensity = (fc.args as any)?.intensity || 'balanced';
-          const notificationText = await ensureBilingualAsync(t('notification_smart'));
+          const dayNumbers = (fc.args as any)?.dayNumbers as number[] | undefined;
+          
+          const msg = dayNumbers 
+            ? `I am regenerating Day(s) ${dayNumbers.join(', ')} for you...`
+            : t('notification_smart');
+            
+          const notificationText = await ensureBilingualAsync(msg);
           setMessages(prev => [...prev, { role: 'model', text: notificationText }]);
           setIsChatLoading(false);
-          handleSmartGeneration(intensity);
+          handleSmartGeneration(intensity, dayNumbers);
           return;
         } else if (fc.name === 'clear_day') {
           const { dayIso } = fc.args as any;
@@ -1033,7 +1058,7 @@ If documents are provided, FAVOR places and descriptions from them. Use their st
     } finally {
       setIsChatLoading(false);
     }
-  }, [chatInput, isChatLoading, getJsonContext, messages, lang, activeTrip]);
+  }, [chatInput, isChatLoading, messages, lang, activeTrip, generatePromptContext, handleSmartGeneration]);
 
   const { isActive: isVoiceActive, startCall, stopCall } = useLiveGemini({
     systemInstruction: liveSystemInstruction,
@@ -1064,7 +1089,9 @@ If documents are provided, FAVOR places and descriptions from them. Use their st
     onUpdateItinerary: async (data: any) => {
       if (!activeTrip) return;
       if (data.type === 'trigger_smart_itinerary_generation') {
-        await handleSmartGeneration(data.intensity);
+        const intensity = data.intensity || 'balanced';
+        const dayNumbers = data.dayNumbers as number[] | undefined;
+        await handleSmartGeneration(intensity, dayNumbers);
         return;
       }
       if (!data.day || data.day < 1) return;
@@ -1140,8 +1167,8 @@ If documents are provided, FAVOR places and descriptions from them. Use their st
         setNotification(t('notification_updated'));
       }
     },
-    onTriggerSmartItinerary: (intensity) => {
-      handleSmartGeneration(intensity);
+    onTriggerSmartItinerary: (intensity, dayNumbers) => {
+      handleSmartGeneration(intensity, dayNumbers);
     },
     onShowUICard: (card) => {
       const msg = {

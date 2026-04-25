@@ -9,7 +9,7 @@ interface UseLiveGeminiProps {
   onRemoveFromItinerary?: (data: { day: number; activity: string }) => void;
   onClearDay?: (data: { day: number }) => void;
   onClearItinerary?: () => void;
-  onTriggerSmartItinerary?: (intensity: string) => void;
+  onTriggerSmartItinerary?: (intensity: string, dayNumbers?: number[]) => void;
   onUploadDoc?: (file: File) => void;
   onRemoteVolumeChange?: (volume: number) => void;
   onVolumeChange?: (volume: number) => void;
@@ -320,7 +320,8 @@ export function useLiveGemini({
                   parameters: {
                     type: "OBJECT",
                     properties: {
-                      intensity: { type: "STRING", enum: ["relaxed", "balanced", "packed"], description: "The pace of the trip." }
+                      intensity: { type: "STRING", enum: ["relaxed", "balanced", "packed"], description: "The pace of the trip." },
+                      dayNumbers: { type: "ARRAY", items: { type: "NUMBER" }, description: "Specific day numbers to regenerate (1-based), e.g. [3]. Leave empty for full trip." }
                     }
                   }
                 },
@@ -696,11 +697,12 @@ export function useLiveGemini({
               } else if (name === 'trigger_smart_itinerary_generation' && args) {
                 const processSmart = async () => {
                   try {
-                    await callbacksRef.current.onTriggerSmartItinerary?.((args as any).intensity);
+                    const { intensity, dayNumbers } = args as any;
+                    await callbacksRef.current.onTriggerSmartItinerary?.(intensity, dayNumbers);
                     if (ws.readyState === WebSocket.OPEN) {
                       ws.send(JSON.stringify({
                         toolResponse: {
-                          functionResponses: [{ id, name, response: { success: true, message: `Started smart generation with intensity: ${args.intensity}. Tell the user to wait a few seconds.` } }]
+                          functionResponses: [{ id, name, response: { success: true, message: `Started smart generation with intensity: ${intensity || 'balanced'}. Tell the user to wait a few seconds.` } }]
                         }
                       }));
                     }
