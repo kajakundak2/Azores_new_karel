@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Trip } from '../data';
 import { usePlannerChat } from '../hooks/usePlannerChat';
 import { PlannerChat } from './PlannerChat';
@@ -9,6 +9,7 @@ import { geminiKeyManager } from '../utils/geminiKeyManager';
 import { MapPin, Calendar, Users, Plane, Sparkles, Trash2, ChevronRight, Compass, ArrowRight, Mic, MicOff, Phone, PhoneOff, Volume2, Hotel, Layout, MessageSquare, Plus, Minus, Sun, Moon } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { TEXTS } from '../data';
+import { createT } from '../utils/i18n';
 
 interface LandingPageProps {
   trips: Trip[];
@@ -16,11 +17,12 @@ interface LandingPageProps {
   onSelectTrip: (tripId: string) => void;
   onDeleteTrip: (tripId: string) => Promise<void>;
   lang: string;
+  onLanguageToggle: (lang: string) => void;
   theme: 'dark' | 'light';
   onThemeToggle: () => void;
 }
 
-export function LandingPage({ trips, onCreateTrip, onSelectTrip, onDeleteTrip, lang, theme, onThemeToggle }: LandingPageProps) {
+export function LandingPage({ trips, onCreateTrip, onSelectTrip, onDeleteTrip, lang, onLanguageToggle, theme, onThemeToggle }: LandingPageProps) {
   const [destination, setDestination] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
@@ -134,15 +136,12 @@ export function LandingPage({ trips, onCreateTrip, onSelectTrip, onDeleteTrip, l
     }
   };
 
-  const { messages, setMessages, loading, sendMessage, resetChat, extractedParams, getConversationSummary, getOriginalRequest } = usePlannerChat({
-    onDataExtracted: handleDataExtracted,
-    onReadyToLaunch: () => {}
-  });
-
-  const architectInstruction = `You are "Sara," an intelligent and friendly travel assistant.
+  const architectInstruction = useMemo(() => `You are "Sara," an intelligent and friendly travel assistant.
     Guide the traveler through setting up their trip with a warm, inviting personality.
     Mandatory: Destination, Start/End Dates, Traveler Details (Adults, Kids, Kids' Ages).
     Current Team: ${adults} Adults, ${kids} Kids.
+    Destination: ${destination || 'Not set'}
+    Dates: ${startDate || 'Not set'} to ${endDate || 'Not set'}
     If they have kids, ask for their ages to suggest appropriate activities.
     Address the user by their name if they introduce themselves, otherwise be generically friendly.
     
@@ -150,7 +149,18 @@ export function LandingPage({ trips, onCreateTrip, onSelectTrip, onDeleteTrip, l
     1. MULTILINGUAL: Always respond in the EXACT SAME LANGUAGE as the user speaks to you. If the user speaks Czech (e.g. says "Ahoj Saro"), you MUST respond ENTIRELY in Czech. Do not switch back to English.
     2. REAL-TIME UPDATES: AS SOON AS the user provides ANY trip details (like destination, dates, or number of travelers), YOU MUST IMMEDIATELY CALL the update_trip_details tool to update the UI. Do not wait until the end of the sentence or turn. If they change their mind, call it again immediately.
     3. PLAN TRIGGER: Once you have gathered sufficient information and the user asks you to create the plan, plan the trip, or "naplánovat itinerář", YOU MUST CALL the trigger_smart_itinerary_generation tool. This will automatically transition the user to the detailed view and start the heavy lifting. DO NOT just say you will do it - YOU MUST CALL THE TOOL.
-    4. IGNORE BACKGROUND NOISE: If you hear random fragments like "That's how" or unclear murmurs without a clear question, gently ignore them or ask "Můžete to zopakovat?" in the matching language.`;
+    4. CLEARING DATA: If the user says "clear everything", "reset it", or "start over", YOU MUST CALL update_trip_details with all fields null to reset the form.
+    5. IGNORE BACKGROUND NOISE: If you hear random fragments like "That's how" or unclear murmurs without a clear question, gently ignore them or ask "Můžete to zopakovat?" in the matching language.`, [adults, kids, destination, startDate, endDate]);
+
+  const { messages, setMessages, loading, sendMessage, resetChat, extractedParams, getConversationSummary, getOriginalRequest } = usePlannerChat({
+    onDataExtracted: handleDataExtracted,
+    onReadyToLaunch: (mode, intensity) => {
+        localStorage.setItem('auto_generate_smart_itinerary', 'true');
+        if (intensity) localStorage.setItem('smart_itinerary_intensity', intensity);
+        handleCreate({ preventDefault: () => {} } as any, mode || 'full');
+    },
+    systemInstruction: architectInstruction
+  });
 
   const { isActive: isVoiceActive, startCall, stopCall } = useLiveGemini({
     systemInstruction: architectInstruction,
@@ -167,18 +177,7 @@ export function LandingPage({ trips, onCreateTrip, onSelectTrip, onDeleteTrip, l
         return [...prev, { role: 'model', text }];
       });
     },
-    onUserMessage: (text, isFinal) => {
-      setMessages(prev => {
-        const last = prev[prev.length - 1];
-        if (last && last.role === 'user') {
-          return [...prev.slice(0, -1), { ...last, text }];
-        }
-        return [...prev, { role: 'user', text }];
-      });
-    },
-    onUpdateTripDetails: (data) => {
-      handleDataExtracted(data);
-    },
+    onUpdateTripDetails: handleDataExtracted,
     onUpdateItinerary: async (data: any) => {
         if (data.type === 'set_trip_details') handleDataExtracted(data);
         if (data.type === 'launch_itinerary') {
@@ -188,8 +187,18 @@ export function LandingPage({ trips, onCreateTrip, onSelectTrip, onDeleteTrip, l
     },
     onTriggerSmartItinerary: (intensity) => {
         localStorage.setItem('auto_generate_smart_itinerary', 'true');
+        if (intensity) localStorage.setItem('smart_itinerary_intensity', intensity);
         handleCreate({ preventDefault: () => {} } as any, 'full');
         stopCall();
+    },
+    onUserMessage: (text, isFinal) => {
+      setMessages(prev => {
+        const last = prev[prev.length - 1];
+        if (last && last.role === 'user') {
+          return [...prev.slice(0, -1), { ...last, text }];
+        }
+        return [...prev, { role: 'user', text }];
+      });
     },
     onUploadDoc: handleUploadDoc
   });
@@ -245,7 +254,7 @@ export function LandingPage({ trips, onCreateTrip, onSelectTrip, onDeleteTrip, l
     setIsCreating(false);
   };
 
-  const t = (key: string) => TEXTS[key]?.[lang] || key;
+  const t = createT(lang);
 
   return (
     <div className={`min-h-screen relative overflow-x-hidden font-sans transition-colors duration-500 pb-20 ${theme === 'dark' ? 'text-slate-100 selection:bg-emerald-500/30' : 'text-slate-900 selection:bg-emerald-500/10'}`}>
@@ -298,9 +307,7 @@ export function LandingPage({ trips, onCreateTrip, onSelectTrip, onDeleteTrip, l
                   <button 
                     onClick={() => {
                         const newLang = lang === 'en' ? 'cs' : 'en';
-                        // Just as placeholder - actual state is in App.tsx
-                        // We rely on the parent updating this prop usually
-                        (window as any).setGlobalLanguage?.(newLang);
+                        onLanguageToggle(newLang);
                     }}
                     className={`px-4 py-3 rounded-2xl border font-black text-[10px] uppercase tracking-widest transition-all ${theme === 'dark' ? 'bg-white/5 border-white/10 text-white hover:bg-white/10' : 'bg-white border-slate-200 text-slate-600'}`}
                   >
@@ -510,7 +517,7 @@ export function LandingPage({ trips, onCreateTrip, onSelectTrip, onDeleteTrip, l
         <section className="space-y-12">
             <div className="flex items-center justify-between px-4 text-left">
                 <h2 className={`text-2xl font-black uppercase tracking-tighter ${theme === 'dark' ? 'text-white' : 'text-slate-950'}`}>{t('recent_trips')}</h2>
-                <div className="text-[10px] font-black text-slate-400 dark:text-white/20 uppercase tracking-[0.4em]">{trips.length} Saved</div>
+                <div className="text-[10px] font-black text-slate-400 dark:text-white/20 uppercase tracking-[0.4em]">{trips.length} {t('saved_count')}</div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
@@ -545,7 +552,7 @@ export function LandingPage({ trips, onCreateTrip, onSelectTrip, onDeleteTrip, l
                                 <div className="space-y-1 text-left drop-shadow-md">
                                     <div className="flex gap-2 mb-1">
                                      <span className="px-3 py-1 bg-emerald-500/30 text-emerald-400 text-[9px] font-black uppercase tracking-[0.1em] rounded-full backdrop-blur-md border border-emerald-500/30 shadow-sm">
-                                          {trip.travelers} Travelers
+                                          {trip.travelers} {t('travelers')}
                                       </span>
                                     </div>
                                     <h3 style={{ textShadow: '0 2px 10px rgba(0,0,0,0.5)' }} className="text-2xl font-black text-white group-hover:text-emerald-400 transition-colors tracking-tighter uppercase leading-tight">

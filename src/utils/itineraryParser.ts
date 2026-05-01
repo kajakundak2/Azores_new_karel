@@ -18,43 +18,7 @@ import { geminiKeyManager } from './geminiKeyManager';
 import { POI, Category } from '../data';
 import { ensureBilingual, stripCodeFences } from './bilingualUtils';
 
-// ── Types ────────────────────────────────────────────────────────────────────
-
-export interface BilingualString {
-  en: string;
-  cs: string;
-  [key: string]: string;
-}
-
-export interface ParsedPOI {
-  title: string | BilingualString;
-  description: string | BilingualString;
-  category: Category;
-  cost?: string;          // e.g. "€65", "€8", "free"
-  startTime?: string;     // e.g. "7:00 AM", "16:00"
-  duration?: number;      // minutes
-  address?: string;
-  practicalTips?: string | BilingualString;  // Tips specifically for this POI
-  coords?: { lat: number; lng: number };
-  imageKeyword?: string;  // keyword for targeted image search, e.g. "Sete Cidades lake azores"
-}
-
-export interface ParsedDay {
-  dayNumber: number;
-  title: string | BilingualString;         // e.g. "First Steps in Ponta Delgada"
-  activities: ParsedPOI[];
-  dayNotes?: string | BilingualString;     // Footer/practical tips for the whole day
-}
-
-export interface SplitterResult {
-  totalDays: number;
-  globalInfo: string | BilingualString;     // Intro/overview text before day 1
-  dayChunks: {
-    dayNumber: number;
-    title: string | BilingualString;
-    rawText: string;      // The full text for this day
-  }[];
-}
+import { BilingualString, ParsedPOI, ParsedDay, SplitterResult } from './types';
 
 export type ProgressCallback = (message: string) => void;
 
@@ -72,7 +36,7 @@ export async function splitDocument(
   onProgress?.('Analyzing document structure...');
 
   let retryCount = 0;
-  const maxRetries = 3;
+  const maxRetries = 6;
 
   while (retryCount < maxRetries) {
     const apiKey = geminiKeyManager.getNextKey();
@@ -133,7 +97,7 @@ CRITICAL: The rawText must contain the COMPLETE text for each day. Do NOT summar
     } catch (err: any) {
       console.error('Splitter error:', err);
       if (err.message?.includes('429') || err.message?.includes('503') || err.message?.includes('fetch failed')) {
-        geminiKeyManager.markKeyFailed(apiKey, true, 30); // 30s cooldown on quotas/503
+        geminiKeyManager.markKeyFailed(apiKey, true, 60); // 60s cooldown on quotas/503
         retryCount++;
         const backoff = 2000 * Math.pow(2, retryCount) + Math.random() * 1000;
         await delay(backoff);
@@ -164,7 +128,7 @@ export async function extractDayPOIs(
   onProgress?.(`Extracting Day ${dayChunk.dayNumber}: ${displayTitle}...`);
 
   let retryCount = 0;
-  const maxRetries = 3;
+  const maxRetries = 6;
 
   while (retryCount < maxRetries) {
     const apiKey = geminiKeyManager.getNextKey();
@@ -218,7 +182,7 @@ Return ONLY valid JSON (no markdown code blocks):
       "address": "Location/area name",
       "practicalTips": { "en": "Specific tips in English", "cs": "Specifické tipy v češtině" } or null,
       "coords": { "lat": 37.123, "lng": -25.456 },
-      "imageKeyword": "terra nostra thermal pool azores"
+      "imageKeyword": "tourist attraction landscape cinematic"
     }
   ],
   "dayNotes": { "en": "Day-level tips in English", "cs": "Tipy na úrovni dne v češtině" } or null
@@ -243,7 +207,7 @@ Return ONLY valid JSON (no markdown code blocks):
     } catch (err: any) {
       console.error(`Worker error (Day ${dayChunk.dayNumber}):`, err);
       if (err.message?.includes('429') || err.message?.includes('503') || err.message?.includes('fetch failed')) {
-        geminiKeyManager.markKeyFailed(apiKey, true, 30);
+        geminiKeyManager.markKeyFailed(apiKey, true, 60);
         retryCount++;
         const backoff = 2000 * Math.pow(2, retryCount) + Math.random() * 1000;
         await delay(backoff);
@@ -312,8 +276,8 @@ export async function generateItineraryFromScratch(
   startDate: string,
   endDate: string,
   travelers: number,
-  intensity: string,
-  referenceContext: string,
+  intensity: 'relaxed' | 'balanced' | 'packed' = 'balanced',
+  referenceContext: string = '',
   onProgress?: ProgressCallback,
   targetDayNumbers?: number[]
 ): Promise<ParsedDay[]> {
@@ -330,43 +294,52 @@ export async function generateItineraryFromScratch(
   // Phase 1: High Level Outline
   onProgress?.(`Phase 1: Generating high-level outline for ${totalDays} days...`);
   let outline = '';
-  try {
-    const outlinePrompt = `Create a plain-text logically routed outline for a ${totalDays}-day trip to ${destination}. Do NOT output JSON.
+  let outlineRetries = 0;
+  
+  while (outlineRetries < 3 && !outline) {
+    try {
+      const outlinePrompt = `Create a plain-text logically routed outline for a ${totalDays}-day trip to ${destination}. Do NOT output JSON.
 Travelers: ${travelers} people. Pace: ${intensity}.
-${referenceContext ? `REFERENCE PREFERENCES:\n${referenceContext}\n` : ''}
+${referenceContext ? `REFERENCE CONTEXT & PREFERENCES:\n${referenceContext}\n` : ''}
 Format as:
 Day 1: [Theme]
 - Morning: [Activity]
 - Lunch: [Restaurant idea]
 ...etc`;
 
-    const outlineResult = await ai.models.generateContent({
-      model: 'gemini-3.1-flash-lite-preview',
-      contents: [{ role: 'user', parts: [{ text: outlinePrompt }] }],
-      config: {
-        systemInstruction: "You are the trip architect. Draft a logically routed day-by-day plan. Ensure each full day has enough activities according to the pace and 2-3 specific real-world restaurants.",
-        temperature: 0.7
+      const outlineResult = await ai.models.generateContent({
+        model: 'gemini-3.1-flash-lite-preview',
+        contents: [{ role: 'user', parts: [{ text: outlinePrompt }] }],
+        config: {
+          systemInstruction: "You are the trip architect. Draft a logically routed day-by-day plan. Ensure each full day has enough activities according to the pace and 2-3 specific real-world restaurants.",
+          temperature: 0.7
+        }
+      });
+      outline = outlineResult.text || '';
+    } catch (err: any) {
+      console.error('Outline generation error:', err);
+      if (err.message?.includes('429') || err.message?.includes('503')) {
+        geminiKeyManager.markKeyFailed(apiKey, true, 60);
+        apiKey = geminiKeyManager.getNextKey();
+        if (!apiKey) throw new Error('Quota exhausted or service unavailable during outline Phase 1.');
+        ai = new GoogleGenAI({ apiKey });
       }
-    });
-    outline = outlineResult.text || '';
-  } catch (err: any) {
-    console.error('Outline generation error:', err);
-    throw new Error('Failed to generate high-level outline: ' + err.message);
+      outlineRetries++;
+      await delay(2000 * outlineRetries);
+    }
   }
+
+  if (!outline) throw new Error('Failed to generate high-level outline after retries.');
 
   // Phase 2: Day details
   const results: ParsedDay[] = [];
+  const daysToProcess = targetDayNumbers || Array.from({ length: totalDays }, (_, i) => i + 1);
 
-  for (let dayNum = 1; dayNum <= totalDays; dayNum++) {
-    // If specific target days are requested, skip others
-    if (targetDayNumbers && targetDayNumbers.length > 0 && !targetDayNumbers.includes(dayNum)) {
-      continue;
-    }
-
+  for (const dayNum of daysToProcess) {
     onProgress?.(`Phase 2: Planning Day ${dayNum} of ${totalDays}...`);
 
     let retryCount = 0;
-    const maxRetries = 3;
+    const maxRetries = 6;
     let dayResult: ParsedDay | null = null;
 
     while (!dayResult && retryCount < maxRetries) {
@@ -382,48 +355,47 @@ ${outline}
 
 Extract and expand the details for DAY ${dayNum} ONLY.
 
-REQUIREMENTS:
-- Extract or plan EVERY activity, restaurant, and viewpoint for this day. No limits on count.
-- Include FOOD stops (breakfast, lunch, dinner, snacks).
-- SMART SCHEDULING: Allocate realistic duration times for people to actually visit and enjoy each place (e.g., 2 hours for a major museum or hike, 45 mins for a coffee, 1.5 hours for lunch).
-- Logically order activities by start time, ensuring you account for driving/transit time between points!
-- MUST output REAL PLACES ONLY with realistic GPS coordinates (lat/lng) so it can be viewed on Google Maps.
-- Include costs where known (e.g. "€12", "free").
-- Include suggested start times for every single activity (e.g. "09:00").
-- Duration in minutes for each activity.
+CONTEXT:
+Travelers: ${travelers}
+Intensity: ${intensity}
+${referenceContext}
 
-Return ONLY valid JSON (no markdown code blocks):
+REQUIREMENTS:
+- Extract or plan EVERY activity, restaurant, and viewpoint for this day.
+- Include FOOD stops (breakfast, lunch, dinner, snacks).
+- SMART SCHEDULING: Allocate realistic duration times (e.g., 2 hours for a hike, 90 mins for lunch).
+- Logically order activities by start time, accounting for transit!
+- MUST output REAL PLACES ONLY with realistic GPS coordinates (lat/lng).
+- Include approximate costs (e.g. "€15", "free").
+- Suggest start times for EVERY activity (e.g. "09:30").
+- Duration in minutes.
+
+Return ONLY valid JSON:
 {
   "dayNumber": ${dayNum},
-  "title": {
-    "en": "A descriptive title for this day based on the outline",
-    "cs": "Czech translation of the title"
-  },
+  "title": { "en": "Day Title", "cs": "Název dne" },
   "activities": [
     {
-      "title": { "en": "Place Name", "cs": "Czech translation of Place Name" },
-      "description": { 
-        "en": "Detailed engaging description with all practical info",
-        "cs": "Czech translation of the description"
-      },
+      "title": { "en": "Place Name", "cs": "Název místa" },
+      "description": { "en": "Expert description...", "cs": "Detailní popis..." },
       "category": "Sightseeing"|"Food"|"Activity"|"Transport"|"Special"|"City",
-      "cost": "€12" or "free" or null,
+      "cost": "€10",
       "startTime": "09:00",
       "duration": 60,
-      "address": "Location name",
-      "practicalTips": { "en": "Tips...", "cs": "Czech tips..." },
+      "address": "Area Name",
+      "practicalTips": { "en": "Tip...", "cs": "Tip..." },
       "coords": { "lat": 37.123, "lng": -25.456 },
-      "imageKeyword": "descriptive photo keyword for this place"
+      "imageKeyword": "photo search term"
     }
   ],
-  "dayNotes": { "en": "Notes...", "cs": "Czech notes..." }
+  "dayNotes": { "en": "Notes...", "cs": "Poznámky..." }
 }`;
 
         const result = await ai.models.generateContent({
           model: 'gemini-3.1-flash-lite-preview',
           contents: [{ role: 'user', parts: [{ text: prompt }] }],
           config: {
-            systemInstruction: 'You are an expert trip detailer. Output strictly valid JSON matching the schema for ONE day. YOU MUST OUTPUT REAL PLACES ONLY. Every activity and restaurant MUST exist in the real world with realistic GPS coordinates. PLAN SMARTLY: Allocate realistic durations for normal tourists and ensure geographic transit time makes sense between consecutive items.',
+            systemInstruction: 'You are an expert trip detailer. Output strictly valid JSON. YOU MUST OUTPUT REAL PLACES ONLY. PLAN SMARTLY.',
             temperature: 0.4,
             responseMimeType: 'application/json'
           }
@@ -436,10 +408,9 @@ Return ONLY valid JSON (no markdown code blocks):
       } catch (err: any) {
         console.error(`Generation error (Day ${dayNum}):`, err);
         if (err.message?.includes('429') || err.message?.includes('503') || err.message?.includes('fetch failed')) {
-          geminiKeyManager.markKeyFailed(apiKey, true, 30);
+          geminiKeyManager.markKeyFailed(apiKey, true, 60);
           retryCount++;
           const backoff = 2000 * Math.pow(2, retryCount);
-          console.warn(`Applying backoff of ${backoff}ms before retrying...`);
           await delay(backoff);
         } else {
           retryCount++;
@@ -453,13 +424,12 @@ Return ONLY valid JSON (no markdown code blocks):
     } else {
       results.push({
         dayNumber: dayNum,
-        title: `Day ${dayNum}`,
+        title: { en: `Day ${dayNum}`, cs: `Den ${dayNum}` },
         activities: [],
-        dayNotes: 'Generation failed for this day.'
+        dayNotes: { en: 'Failed to generate.', cs: 'Nepodařilo se vygenerovat.' }
       });
     }
 
-    // Increased delay between days
     if (dayNum < totalDays) {
       await delay(1000);
     }
@@ -519,8 +489,6 @@ export function parsedDaysToItinerary(
   return result;
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
 function buildBilingualDescription(act: ParsedPOI): BilingualString {
   const desc = ensureBilingual(act.description);
   const tips = act.practicalTips ? ensureBilingual(act.practicalTips) : null;
@@ -539,4 +507,54 @@ function parseCost(costStr: string): number | undefined {
 
 function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+export async function enrichPlaceWithAi(placeTitle: string, location?: {lat: number, lng: number}): Promise<{
+  description: BilingualString;
+  cost?: number;
+  duration?: number;
+}> {
+  const apiKey = geminiKeyManager.getNextKey();
+  if (!apiKey) throw new Error('No API keys available.');
+
+  const ai = new GoogleGenAI({ apiKey });
+  
+  const prompt = `You are a travel data assistant. I have a location from Google Maps:
+Title: ${placeTitle}
+${location ? `Coordinates: ${location.lat}, ${location.lng}` : ''}
+
+Please return ONLY a valid JSON object with detailed travel information about this place.
+Do not wrap it in markdown block quotes.
+
+Format required:
+{
+  "description": {
+    "en": "A 2-3 sentence engaging description about what this place is and why to visit.",
+    "cs": "Czech translation of the description."
+  },
+  "cost": 15.5, // Numeric estimated entrance fee or cost in Euros. Return 0 if free, or null if unknown or completely unpredictable
+  "duration": 60 // Estimated typical visit duration in minutes
+}
+`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: prompt,
+      config: { temperature: 0.2 },
+    });
+    
+    let text = response.text || '';
+    text = stripCodeFences(text);
+    const parsed = JSON.parse(text);
+    
+    return {
+      description: parsed.description || { en: '', cs: '' },
+      cost: parsed.cost !== null ? parsed.cost : undefined,
+      duration: parsed.duration || 60
+    };
+  } catch (err) {
+    console.error('Failed to enrich place via AI:', err);
+    throw new Error('Failed to generate place details.');
+  }
 }

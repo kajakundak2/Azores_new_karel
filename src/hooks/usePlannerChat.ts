@@ -24,15 +24,19 @@ export interface ChatMessage {
 
 interface UsePlannerChatProps {
   onDataExtracted?: (params: TripParams) => void;
-  onReadyToLaunch?: () => void;
+  onReadyToLaunch?: (mode?: 'full' | 'suggestions_only', intensity?: string) => void;
+  systemInstruction: string;
 }
 
-export function usePlannerChat({ onDataExtracted, onReadyToLaunch }: UsePlannerChatProps) {
+export function usePlannerChat({ onDataExtracted, onReadyToLaunch, systemInstruction: baseSystemInstruction }: UsePlannerChatProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(false);
   const [extractedParams, setExtractedParams] = useState<TripParams>({
     stays: [],
-    previewDays: {}
+    previewDays: {},
+    adults: 1,
+    kids: 0,
+    kidsAges: []
   });
 
   const sendMessage = useCallback(async (text: string) => {
@@ -44,212 +48,207 @@ export function usePlannerChat({ onDataExtracted, onReadyToLaunch }: UsePlannerC
     const maxRetries = 3;
 
     const executeGeneration = async (): Promise<boolean> => {
-      const apiKey = geminiKeyManager.getNextKey();
-      if (!apiKey) {
-        setMessages(prev => [...prev, { role: 'model', text: "No API keys available. Please check your configuration." }]);
-        return true;
-      }
+      let retryCount = 0;
+      const maxRetries = 6;
+      let success = false;
+      
+      // Models to try in order of complexity/quota
+      const modelStack = [
+        'gemini-3.1-flash-lite-preview'
+      ];
 
-      try {
-        const ai = new GoogleGenAI({ apiKey });
+      while (!success && retryCount < maxRetries) {
+        const apiKey = geminiKeyManager.getNextKey();
+        const modelToUse = modelStack[Math.min(retryCount, modelStack.length - 1)];
 
-      const systemInstruction = `You are "Sára," the intelligent travel planning assistant.
-      
-      YOUR GOAL:
-      Help the traveler define their trip parameters. Guide them through necessary and optional questions with a friendly, conversational tone.
-      
-      TRIP LOGISTICS:
-      - Mandatory Fields: Destination, Start Date, End Date, and Traveler Group (Adults, Kids, Kids' Ages).
-      - If they have kids, ask for their ages to customize the suggestions.
-      - We track accommodations ("Stays"). If they have a stay booked, ask for the name and dates.
-      - Helpful Advice: If they stay longer than a week, suggest if they want to plan activities in different geographic clusters to minimize driving time.
-      
-      CORE TOOLS:
-      1. Use "set_trip_details" for basic params (Destination, Dates, Travelers, Prefs).
-      2. Use "add_stay" when they mention where they are staying.
-      3. Use "propose_day_plan" to suggest a thematic bundle for a specific day (e.g. "Beach & Sun").
-      4. Use "set_traveler_profiles" when the user tells you who is traveling (names, genders, ages). This updates the packing list — each person gets a personalized AI-generated packing list based on their gender.
-      5. Once everything is set, ask "Ready to create your itinerary?" and call "launch_expedition" if they agree.
-      
-      PACKING LIST: When the user says who is traveling with them (e.g. "I'm going with my wife Monika and daughter Natalka"), always call "set_traveler_profiles" immediately with all travelers' details so their personalized packing lists can be generated.
-      
-      TONE: Friendly, collaborative, and helpful. Address the user naturally by their name if provided, or simply as a fellow traveler.`;
+        if (!apiKey) {
+          setMessages(prev => [...prev, { role: 'model', text: "No API keys available. Please check your configuration." }]);
+          return true;
+        }
 
-      const contents = newMessages.map(m => ({
-        role: m.role,
-        parts: [{ text: m.text }]
-      }));
+        try {
+          const ai = new GoogleGenAI({ apiKey });
+          
+          // Enrich system instruction with trip context if provided
+          const finalSystemInstruction = `${baseSystemInstruction || 'You are "Sára," an intelligent travel assistant.'}
+          
+${baseSystemInstruction ? '' : `YOUR GOAL:
+Help the traveler define their trip parameters. Guide them through necessary and optional questions with a friendly, conversational tone.
 
-      const result = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents,
-        config: {
-          systemInstruction,
-          tools: [{
-            functionDeclarations: [
-              {
-                name: "set_trip_details",
-                description: "Update primary expedition parameters.",
-                parameters: {
-                  type: "OBJECT",
-                  properties: {
-                    destination: { type: "STRING" },
-                    startDate: { type: "STRING", description: "YYYY-MM-DD" },
-                    endDate: { type: "STRING", description: "YYYY-MM-DD" },
-                    adults: { type: "NUMBER" },
-                    kids: { type: "NUMBER" },
-                    kidsAges: { type: "ARRAY", items: { type: "NUMBER" }, description: "Age of each child in the group" },
-                    preferences: { type: "STRING", description: "Interests like 'hiking', 'food', 'relaxing'." }
-                  }
-                } as any
-              },
-              {
-                name: "add_stay",
-                description: "Record an accommodation/base camp.",
-                parameters: {
-                  type: "OBJECT",
-                  properties: {
-                    name: { type: "STRING", description: "Hotel name or 'AirBnB' or Booking.com" },
-                    address: { type: "STRING" },
-                    checkIn: { type: "STRING", description: "YYYY-MM-DD" },
-                    checkOut: { type: "STRING", description: "YYYY-MM-DD" }
+TRIP LOGISTICS:
+- Mandatory Fields: Destination, Start Date, End Date, and Traveler Group (Adults, Kids, Kids' Ages).
+- If they have kids, ask for their ages to customize the suggestions.
+- We track accommodations ("Stays"). If they have a stay booked, ask for the name and dates.
+
+CORE TOOLS:
+1. Use "set_trip_details" for basic params.
+2. Use "add_stay" when they mention where they are staying.
+3. Use "set_traveler_profiles" when the user tells you who is traveling (names, genders, ages).
+4. Once everything is set, ask "Ready to create your itinerary?" and call "launch_expedition" if they agree.`}
+
+TONE: Friendly, collaborative, and helpful.`;
+
+          const contents = newMessages.map(m => ({
+            role: m.role,
+            parts: [{ text: m.text }]
+          }));
+
+          const result = await ai.models.generateContent({
+            model: modelToUse,
+            contents,
+            config: {
+              systemInstruction: finalSystemInstruction,
+              tools: [{
+                functionDeclarations: [
+                  {
+                    name: "update_trip_details",
+                    description: "Update primary expedition parameters.",
+                    parameters: {
+                      type: "OBJECT",
+                      properties: {
+                        destination: { type: "STRING" },
+                        startDate: { type: "STRING", description: "YYYY-MM-DD" },
+                        endDate: { type: "STRING", description: "YYYY-MM-DD" },
+                        adults: { type: "NUMBER" },
+                        kids: { type: "NUMBER" },
+                        kidsAges: { type: "ARRAY", items: { type: "NUMBER" } },
+                        preferences: { type: "STRING" }
+                      }
+                    } as any
                   },
-                  required: ["name", "checkIn", "checkOut"]
-                } as any
-              },
-              {
-                name: "propose_day_plan",
-                description: "Propose a thematic itinerary for a specific day to show as a preview.",
-                parameters: {
-                  type: "OBJECT",
-                  properties: {
-                    dayNumber: { type: "NUMBER" },
-                    theme: { type: "STRING" },
-                    activities: {
-                      type: "ARRAY",
-                      items: {
-                        type: "OBJECT",
-                        properties: {
-                          title: { type: "STRING" },
-                          category: { type: "STRING", enum: ["Sightseeing", "Food", "Activity", "Transport", "Special", "Event"] }
+                  {
+                    name: "add_stay",
+                    description: "Record an accommodation.",
+                    parameters: {
+                      type: "OBJECT",
+                      properties: {
+                        name: { type: "STRING" },
+                        address: { type: "STRING" },
+                        checkIn: { type: "STRING" },
+                        checkOut: { type: "STRING" }
+                      },
+                      required: ["name", "checkIn", "checkOut"]
+                    } as any
+                  },
+                  {
+                    name: "set_traveler_profiles",
+                    description: "Record individual traveler details.",
+                    parameters: {
+                      type: "OBJECT",
+                      properties: {
+                        travelers: {
+                          type: "ARRAY",
+                          items: {
+                            type: "OBJECT",
+                            properties: {
+                              name: { type: "STRING" },
+                              gender: { type: "STRING", enum: ["male", "female", "child"] },
+                              age: { type: "NUMBER" }
+                            },
+                            required: ["name", "gender"]
+                          }
                         }
+                      },
+                      required: ["travelers"]
+                    } as any
+                  },
+                  {
+                    name: "trigger_smart_itinerary_generation",
+                    description: "Finalize parameters and trigger full itinerary generation.",
+                    parameters: {
+                      type: "OBJECT",
+                      properties: {
+                        intensity: { type: "STRING", enum: ["relaxed", "balanced", "packed"], description: "The pace of the trip." },
+                        dayNumbers: { type: "ARRAY", items: { type: "NUMBER" }, description: "Specific day numbers to regenerate (1-based). Leave empty for full trip." }
                       }
-                    }
+                    } as any
+                  },
+                  {
+                    name: "generate_itinerary",
+                    description: "Alias for trigger_smart_itinerary_generation.",
+                    parameters: {
+                      type: "OBJECT",
+                      properties: {
+                        planningMode: { type: "STRING", enum: ["full", "suggestions_only"], description: "The choice: 'full' (day-by-day) or 'suggestions_only' (POIs only)." }
+                      }
+                    } as any
                   }
-                } as any
-              },
-              {
-                name: "set_traveler_profiles",
-                description: "Record individual traveler details including name, gender, and age. Call when the user shares who is traveling.",
-                parameters: {
-                  type: "OBJECT",
-                  properties: {
-                    travelers: {
-                      type: "ARRAY",
-                      items: {
-                        type: "OBJECT",
-                        properties: {
-                          name: { type: "STRING", description: "Traveler name" },
-                          gender: { type: "STRING", enum: ["male", "female", "child"], description: "Gender or child" },
-                          age: { type: "NUMBER", description: "Optional age" }
-                        },
-                        required: ["name", "gender"]
-                      }
-                    }
-                  },
-                  required: ["travelers"]
-                } as any
-              },
-              {
-                name: "set_packing_requirements",
-                description: "Update specific requirements for the packing list (e.g. 'extra warm clothes for hiking', 'formal wear for dinner').",
-                parameters: {
-                  type: "OBJECT",
-                  properties: {
-                    requirements: { type: "STRING" }
-                  },
-                  required: ["requirements"]
-                } as any
-              },
-              {
-                name: "launch_expedition",
-                description: "Confirm mission readiness and finalize creation.",
-                parameters: { type: "OBJECT", properties: {} } as any
+                ]
+              }]
+            }
+          });
+
+          let modelText = result.text || "Updating your trip details...";
+
+          if (result.functionCalls && result.functionCalls.length > 0) {
+            let updatedParams = { ...extractedParams };
+
+            for (const fc of result.functionCalls) {
+              if (fc.name === 'update_trip_details' || fc.name === 'set_trip_details') {
+                updatedParams = { ...updatedParams, ...fc.args };
               }
-            ]
-          }]
-        }
-      });
+              if (fc.name === 'add_stay') {
+                const newStay = { id: 'stay-' + Date.now(), ...fc.args };
+                updatedParams.stays = [...(updatedParams.stays || []), newStay];
+              }
+              if (fc.name === 'set_traveler_profiles') {
+                const profiles = ((fc.args as any).travelers || []).map((t: any, i: number) => ({
+                  id: `traveler-${Date.now()}-${i}`,
+                  name: t.name,
+                  gender: t.gender,
+                  age: t.age
+                }));
+                updatedParams.travelerProfiles = profiles;
+              }
+              if (fc.name === 'trigger_smart_itinerary_generation' || fc.name === 'generate_itinerary' || fc.name === 'launch_expedition') {
+                const args = fc.args as any;
+                onReadyToLaunch?.(args?.planningMode || 'full', args?.intensity);
+              }
+            }
 
-      let modelText = result.text || "Updating your trip details...";
+            setExtractedParams(updatedParams);
+            onDataExtracted?.(updatedParams);
 
-      if (result.functionCalls && result.functionCalls.length > 0) {
-        let updatedParams = { ...extractedParams };
+            if (!result.text) {
+              modelText = "Trip updated! What should we plan next?";
+            }
+          }
 
-        for (const fc of result.functionCalls) {
-          if (fc.name === 'set_trip_details') {
-            updatedParams = { ...updatedParams, ...fc.args };
-          }
-          if (fc.name === 'add_stay') {
-            const newStay = { id: 'stay-' + Date.now(), ...fc.args };
-            updatedParams.stays = [...(updatedParams.stays || []), newStay];
-          }
-          if (fc.name === 'propose_day_plan') {
-            const { dayNumber, theme, activities } = fc.args as any;
-            updatedParams.previewDays = {
-              ...(updatedParams.previewDays || {}),
-              [`day-${dayNumber}`]: { theme, activities }
-            };
-          }
-          if (fc.name === 'set_traveler_profiles') {
-            const profiles = ((fc.args as any).travelers || []).map((t: any, i: number) => ({
-              id: `traveler-${Date.now()}-${i}`,
-              name: t.name,
-              gender: t.gender,
-              age: t.age
-            }));
-            updatedParams.travelerProfiles = profiles;
-          }
-          if (fc.name === 'set_packing_requirements') {
-            updatedParams.packingRequirements = (fc.args as any).requirements;
-          }
-          if (fc.name === 'launch_expedition') {
-            onReadyToLaunch?.();
-          }
-        }
+          setMessages(prev => [...prev, { role: 'model', text: modelText }]);
+          success = true;
+          return true;
+        } catch (err: any) {
+          const isRateLimit = err?.message?.includes('429') || err?.status === 429;
+          console.warn(`Planner Chat Error (Model: ${modelToUse}, Key: ${apiKey.substring(0, 5)}...):`, err.message);
 
-        setExtractedParams(updatedParams);
-        onDataExtracted?.(updatedParams);
-
-        if (!result.text) {
-          modelText = "Trip updated! We've got " +
-            (updatedParams.destination ? `the destination for ${updatedParams.destination} ` : "") +
-            (updatedParams.stays?.length ? `and ${updatedParams.stays.length} stay(s) recorded. ` : "but no stays yet. ") +
-            "What should we plan next?";
+          if (isRateLimit || err.message?.includes('503')) {
+            geminiKeyManager.markKeyFailed(apiKey, true, 60);
+            retryCount++;
+            if (retryCount < maxRetries) {
+              // Switch model and retry immediately with next key
+              await new Promise(r => setTimeout(r, 1000));
+              continue;
+            }
+          } else if (err.message?.includes('429')) {
+            geminiKeyManager.markKeyFailed(apiKey, true, 60);
+            retryCount++;
+            continue;
+          } else {
+            geminiKeyManager.markKeyFailed(apiKey, false);
+            retryCount++;
+            await new Promise(r => setTimeout(r, 1000));
+            continue;
+          }
         }
       }
 
-      setMessages(prev => [...prev, { role: 'model', text: modelText }]);
-      return true;
-    } catch (err: any) {
-        const isRateLimit = err?.message?.includes('429') || err?.status === 429;
-        geminiKeyManager.markKeyFailed(apiKey, isRateLimit);
-
-        if (isRateLimit && retryCount < maxRetries) {
-          retryCount++;
-          console.warn(`usePlannerChat: Rate limited. Retrying with next key (attempt ${retryCount}/${maxRetries})...`);
-          return await executeGeneration();
-        }
-
-        console.error('Planner Chat Error:', err);
-        setMessages(prev => [...prev, { role: 'model', text: "I'm having a little trouble connecting. Could you try that again?" }]);
-        return true;
-      }
+      setMessages(prev => [...prev, { role: 'model', text: "I'm having a little trouble connecting. Could you try that again in a moment? (Rate limit reached)" }]);
+      return false;
     };
 
     await executeGeneration();
     setLoading(false);
-  }, [messages, extractedParams, onDataExtracted, onReadyToLaunch]);
+  }, [messages, extractedParams, onDataExtracted, onReadyToLaunch, baseSystemInstruction]);
 
   const resetChat = useCallback(() => {
     setMessages([]);

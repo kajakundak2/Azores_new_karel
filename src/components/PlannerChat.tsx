@@ -1,11 +1,13 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Send, Sparkles, Loader2, Compass, ArrowRight, RefreshCw, User, Bot, Phone, PhoneOff, Mic, MicOff, Paperclip } from 'lucide-react';
-import { TEXTS } from '../data';
+import { TEXTS, POI } from '../data';
+import { translate } from '../utils/bilingualUtils';
 
 interface ChatMessage {
   role: 'user' | 'model';
-  text: string;
+  text: string | { en: string; cs: string };
+  uiCards?: POI[];
 }
 
 interface PlannerChatProps {
@@ -125,7 +127,7 @@ export function PlannerChat({
                   ? (theme === 'dark' ? 'bg-white/5 border border-white/5 text-slate-200' : 'bg-slate-100 border border-slate-200 text-slate-800')
                   : 'bg-emerald-500 text-slate-950 font-medium'
               }`}>
-                {msg.text}
+                {translate(msg.text, lang)}
               </div>
             </motion.div>
           ))}

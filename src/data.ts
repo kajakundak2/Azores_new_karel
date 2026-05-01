@@ -16,8 +16,8 @@ export interface ChatMessage {
 
 export interface POI {
   id: string;
-  title: Record<string, string>;
-  description?: Record<string, string>;
+  title: { en: string; cs: string; [key: string]: string; };
+  description?: { en: string; cs: string; [key: string]: string; };
   category: Category;
   duration: number; // in minutes
   imageUrl?: string;
@@ -36,6 +36,7 @@ export interface POI {
   startTime?: string;   // Suggested start time (Phase 4)
   address?: string; // New: Full address for Google Maps style
   googleMapsUrl?: string; // New: Direct link for export/viewing
+  googlePlaceId?: string; // New: Google Place ID for matching
   transportModeTo?: 'car' | 'bus' | 'walk' | 'bicycle'; // New: User preferred arrival mode
 }
 
@@ -130,8 +131,6 @@ export const SLIDES = [
   '/pictures/7.png',
 ];
 
-export const AZORES_POIS: POI[] = [];
-
 export const FIXED_EVENTS: Record<string, POI[]> = {};
 
 export const TEXTS: Record<string, Record<string, string>> = {
@@ -145,8 +144,8 @@ export const TEXTS: Record<string, Record<string, string>> = {
   },
   // Landing page keys
   landing_title_itinerary: {
-    en: 'LANDING',
-    cs: 'TRASY',
+    en: 'EXPEDITIONS',
+    cs: 'EXPEDICE',
   },
   landing_subtitle: {
     en: 'INTELLIGENT EXPEDITION PLANNING',
@@ -192,22 +191,21 @@ export const TEXTS: Record<string, Record<string, string>> = {
     en: 'Itinerary',
     cs: 'Itinerář',
   },
-  library: {
-    en: 'Library',
-    cs: 'Knihovna',
+  itinerary_label: {
+    en: 'EXPEDITION LOG',
+    cs: 'DENÍK EXPEDICE',
   },
-  recent_trips: {
-    en: 'Recent Trips',
-    cs: 'Nedávné cesty'
-  },
+  atlas_title: { en: 'EXPEDITION ATLAS', cs: 'ATLAS EXPEDICE' },
+  inspiration_title: { en: 'FIELD INTEL', cs: 'TERÉNNÍ PRŮZKUM' },
   empty_logbook: {
-    en: 'Empty Logbook',
-    cs: 'Prázdný deník'
+    en: 'NO PREVIOUS MISSIONS',
+    cs: 'ŽÁDNÉ PŘEDCHOZÍ MISE'
   },
   travelers: {
     en: 'Travelers',
     cs: 'Cestovatelé'
   },
+  name: { en: 'Name', cs: 'Jméno' },
   chat_title: {
     en: 'Chat with Sára',
     cs: 'Chat se Sárou',
@@ -215,10 +213,6 @@ export const TEXTS: Record<string, Record<string, string>> = {
   chat_placeholder: {
     en: 'Ask Sára anything...',
     cs: 'Zeptej se Sáry na cokoliv...'
-  },
-  chat_thinking: {
-    en: 'Sára is thinking...',
-    cs: 'Sára přemýšlí...'
   },
   drag_prompt: {
     en: 'Drag places here\nto build the day',
@@ -228,10 +222,27 @@ export const TEXTS: Record<string, Record<string, string>> = {
     en: 'Add to Day',
     cs: 'Přidat do dne',
   },
+  travelers_count: {
+    en: 'TRAVELERS: {{count}}',
+    cs: 'CESTOVATELÉ: {{count}}'
+  },
+  days_count: {
+    en: 'MISSION DURATION: {{count}} DAYS',
+    cs: 'DÉLKA MISE: {{count}} DNŮ',
+  },
   remove: {
     en: 'Remove',
     cs: 'Odebrat',
   },
+  // Detail keys
+  poi_directions: { en: 'Directions', cs: 'Navigovat' },
+  poi_save_to_day: { en: 'Save to Day', cs: 'Uložit do dne' },
+  poi_book_online: { en: 'Book Online', cs: 'Rezervovat online' },
+  poi_no_description: { 
+    en: 'Detailed intelligence pending. Sára can run a localized analysis for you.', 
+    cs: 'Podrobné informace zatím chybí. Sára pro vás může provést lokalizovanou analýzu.' 
+  },
+
   packing_list: { en: 'Packing List', cs: 'Co s sebou' },
   packing_traveler: { en: 'Traveler', cs: 'Cestovatel' },
   packing_male: { en: 'Man', cs: 'Muž' },
@@ -247,7 +258,20 @@ export const TEXTS: Record<string, Record<string, string>> = {
   packing_packed: { en: 'packed', cs: 'zabaleno' },
   packing_complete: { en: 'All packed! Ready to go!', cs: 'Zabaleno! Připraveni na cestu!' },
   packing_incomplete: { en: 'Still packing...', cs: 'Ještě balíme...' },
+  packing_btn: { en: 'Checklist', cs: 'Seznam' },
+  packing_ready: { en: 'Ready', cs: 'Připraveno' },
+  packing_in_progress: { en: 'Prep', cs: 'Příprava' },
+  packing_cat_clothing: { en: 'Clothing', cs: 'Oblečení' },
+  packing_cat_electronics: { en: 'Electronics', cs: 'Elektronika' },
+  packing_cat_documents: { en: 'Documents', cs: 'Dokumenty' },
+  packing_cat_toiletries: { en: 'Hygienics', cs: 'Hygiena' },
+  packing_cat_health: { en: 'Health', cs: 'Zdraví' },
+  packing_cat_misc: { en: 'Misc', cs: 'Ostatní' },
+  stays_btn: { en: 'Stays', cs: 'Ubytování' },
   age_children: { cs: 'Věk dětí', en: "Children's Ages" },
+  planning_strategy: { cs: 'Strategie plánování', en: 'Planning Strategy' },
+  strategy_full: { cs: 'Kompletní plán', en: 'Full Schedule' },
+  strategy_suggestions: { cs: 'Jen návrhy', en: 'Suggestions Only' },
   strategy_full_desc: { cs: 'Sára vytvoří kompletní rozvrh den po dni.', en: 'Sara will build a complete day-by-day schedule.' },
   strategy_suggestions_desc: { cs: 'Sára vybere nejlepší místa, ale nechá vám volnou ruku v čase.', en: 'Sara will pick the best spots, but leave the timing up to you.' },
   mystery_destination: { cs: 'Záhadné místo', en: 'Mystery Destination' },
@@ -265,7 +289,7 @@ export const TEXTS: Record<string, Record<string, string>> = {
   notification_smart: { cs: '🔄 Spouštím chytré plánování pro celý výlet...', en: '🔄 Starting smart generation for the whole trip...' },
   notification_updated: { cs: 'Sára aktualizovala detaily cesty.', en: 'Sára updated trip details.' },
   notification_added: { cs: 'Přidáno do itineráře!', en: 'Added to itinerary!' },
-  units_person: { cs: 'os', en: 'px' },
+  units_person: { cs: 'os', en: 'person' },
   lets_go: { cs: 'Jedeme!', en: "Let's go!" },
   so_many_things: { cs: 'Tolik věcí...', en: 'So many things...' },
   stays_manager: {
@@ -337,8 +361,8 @@ export const TEXTS: Record<string, Record<string, string>> = {
     cs: 'Generuji itinerář',
   },
   gathering_spots: {
-    en: 'Gathering the best spots',
-    cs: 'Sbírám nejlepší místa',
+    en: 'Scanning for local intel...',
+    cs: 'Skenuji místní data...',
   },
   sara_voice: {
     en: 'Sara Voice Assistant',
@@ -352,54 +376,11 @@ export const TEXTS: Record<string, Record<string, string>> = {
     en: 'Online & Ready',
     cs: 'Online a připravena',
   },
-  syncing_sara: {
-    en: 'Syncing with Sára',
-    cs: 'Synchronizace se Sárou',
+  atlas_library_title: {
+    en: 'EXPEDITION ATLAS',
+    cs: 'ATLAS EXPEDICE',
   },
-  trending_inspiration: {
-    en: 'Trending Inspiration',
-    cs: 'Trendová inspirace',
-  },
-  no_activities: {
-    en: 'No activities planned',
-    cs: 'Žádné naplánované aktivity',
-  },
-  drag_drop_here: {
-    en: 'Drag and drop places here',
-    cs: 'Přetáhněte místa sem',
-  },
-  total_time: {
-    en: 'Total Time',
-    cs: 'Celkový čas',
-  },
-  view_on_instagram: {
-    en: 'View on Instagram →',
-    cs: 'Zobrazit na Instagramu →',
-  },
-  discovering: {
-    en: 'Discovering...',
-    cs: 'Objevuji...',
-  },
-  added_to_itinerary: {
-    en: 'Added to itinerary!',
-    cs: 'Přidáno do itineráře!',
-  },
-  search_results: {
-    en: 'Search Results',
-    cs: 'Výsledky hledání',
-  },
-  atlas_library: {
-    en: 'Atlas Library',
-    cs: 'Knihovna Atlas',
-  },
-  search_in: {
-    en: 'Search in',
-    cs: 'Hledat v',
-  },
-  search_within_visible: {
-    en: 'Search within visible area only',
-    cs: 'Hledat pouze v zobrazené oblasti',
-  },
+  search_visible_only: { en: 'Visible area only', cs: 'Pouze viditelná oblast' },
   clear: {
     en: 'Clear',
     cs: 'Vymazat',
@@ -425,6 +406,12 @@ export const TEXTS: Record<string, Record<string, string>> = {
   weather_dry: { en: 'Dry', cs: 'Sucho' },
   weather_confidence: { en: 'Plan your day with confidence', cs: 'Plánujte den s jistotou' },
   // Chat
+  chat_header_title: { en: 'Sára AI Agent', cs: 'Sára AI Agent' },
+  chat_ready_status: { en: 'Live & Ready', cs: 'Na příjmu' },
+  chat_welcome_title: { en: 'How can I help you?', cs: 'Jak vám mohu pomoci?' },
+  chat_welcome_desc: { en: 'Plan your trip, find hidden gems, or check local weather with Sára.', cs: 'Naplánujte si cestu, objevte skrytá místa nebo zkontrolujte počasí se Sárou.' },
+  chat_input_placeholder: { en: 'Message Sára...', cs: 'Napište Sáře...' },
+  chat_launch_expedition: { en: 'Launch Expedition', cs: 'Spustit expedici' },
   chat_reset: { en: 'Reset conversation', cs: 'Resetovat konverzaci' },
   chat_voice_architect: { en: 'Live Voice Architect', cs: 'Hlasový architekt' },
   chat_voice_to_text: { en: 'Voice-to-Text', cs: 'Hlas na text' },
@@ -454,7 +441,9 @@ export const TEXTS: Record<string, Record<string, string>> = {
   intel_timestamp: { en: 'Timestamp', cs: 'Čas' },
   intel_trip_start: { en: 'Trip Start', cs: 'Začátek cesty' },
   intel_trip_end: { en: 'Trip End', cs: 'Konec cesty' },
-  intel_warning: { en: 'Check arrival times for local transport. Renting a car is mission-critical for Azores logistics.', cs: 'Zkontrolujte časy příjezdů pro místní dopravu. Pronájem auta je klíčový pro logistiku na Azorech.' },
+  karel_pedro_arrival: { en: 'KAREL & PEDRO ARRIVAL', cs: 'PŘÍLET KAREL & PEDRO' },
+  touchdown_time: { en: '07:30 AM / TOUCHDOWN', cs: '07:30 / PŘISTÁNÍ' },
+  intel_warning: { en: 'Check arrival times for local transport. Renting a car is often mission-critical for efficient logistics.', cs: 'Zkontrolujte časy příjezdů pro místní dopravu. Pronájem auta je často klíčový pro efektivní logistiku.' },
   intel_accommodations: { en: 'Accommodations', cs: 'Ubytování' },
   intel_stay_badge: { en: 'STAY', cs: 'POBYT' },
   intel_no_stays: { en: 'No stays identified.', cs: 'Žádné ubytování nebylo nalezeno.' },
@@ -463,85 +452,52 @@ export const TEXTS: Record<string, Record<string, string>> = {
   share_trip: { en: 'Share Trip', cs: 'Sdílet cestu' },
   add_to_itinerary: { en: 'Add to Itinerary', cs: 'Přidat do itineráře' },
   total_nights: { en: 'Total Nights', cs: 'Celkem nocí' },
-  total_budget: { en: 'Total Budget', cs: 'Celkové náklady' },
-  save_changes: { en: 'Save Changes', cs: 'Uložit změny' },
-  cancel: { en: 'Cancel', cs: 'Zrušit' },
-  back_to_list: { en: 'Back to list', cs: 'Zpět na seznam' },
-  price_per_night: { en: 'Price / Night', cs: 'Cena / Noc' },
+  total_budget: { en: 'Total Budget', cs: 'Celkový rozpočet' },
   total: { en: 'Total', cs: 'Celkem' },
   find_stay: { en: 'Find Stay', cs: 'Najít ubytování' },
   stays_list: { en: 'Stays List', cs: 'Seznam ubytování' },
   stay_search_placeholder: { en: 'Accommodation name or address...', cs: 'Název ubytování nebo adresa...' },
+  save_changes: { en: 'Save Changes', cs: 'Uložit změny' },
+  cancel: { en: 'Cancel', cs: 'Zrušit' },
+  back_to_list: { en: 'Back to list', cs: 'Zpět na seznam' },
+  stays_checkin: { en: 'Check-in', cs: 'Check-in' },
+  stays_checkout: { en: 'Check-out', cs: 'Check-out' },
+  price_per_night: { en: 'Price per night', cs: 'Cena za noc' },
+  stays_empty: { en: 'No accommodations found. Use the search to add your first stay.', cs: 'Žádné ubytování nebylo nalezeno. Použijte hledání pro přidání prvního pobytu.' },
   // Landing
-  readiness: { en: 'Readiness', cs: 'Připravenost' },
-  target_destination: { en: 'Target Destination', cs: 'Cílová destinace' },
-  trip_timeframe: { en: 'Trip Timeframe', cs: 'Časové rozmezí' },
-  planning_strategy: { en: 'Planning Strategy', cs: 'Strategie plánování' },
-  strategy_full: { en: 'Full Itinerary', cs: 'Kompletní plán' },
-  strategy_suggestions: { en: 'Suggestions Only', cs: 'Jen inspirace' },
-  status_online: { en: 'Online', cs: 'Online' },
-  // Treasure Hunt
-  treasure_help_find: { en: 'Help Kaja & Pedro find their way!', cs: 'Pomozte Kajovi a Petrovi najít cestu!' },
-  treasure_found: { en: 'They made it!', cs: 'Zvládli to!' },
-  treasure_leaderboard: { en: 'Global Leaderboard', cs: 'Globální žebříček' },
-  treasure_play_again: { en: 'Play Again', cs: 'Hrát znovu' },
-  treasure_enter_name: { en: 'Enter your name', cs: 'Zadejte své jméno' },
-  treasure_save_score: { en: 'Save Score', cs: 'Uložit skóre' },
-  // Poi & Stays
-  poi_directions: { en: 'Directions', cs: 'Navigovat' },
-  poi_save_to_day: { en: 'Save to Day ', cs: 'Uložit do dne ' },
-  poi_book_online: { en: 'Book Online', cs: 'Rezervovat online' },
-  poi_duration_suffix: { en: ' duration', cs: ' trvání' },
-  poi_no_description: { en: 'No description available for this activity.', cs: 'Pro tuto aktivitu není k dispozici žádný popis.' },
-  stays_title: { en: 'Manage Stays', cs: 'Spravovat ubytování' },
-  stays_tab_search: { en: 'Search Hotels', cs: 'Hledat hotely' },
-  stays_tab_list: { en: 'My Stays', cs: 'Moje pobyty' },
-  stays_placeholder: { en: 'Search for hotels, villas, or apartments...', cs: 'Hledejte hotely, vily nebo apartmány...' },
-  stays_empty: { en: 'No stays added yet.', cs: 'Zatím nebylo přidáno žádné ubytování.' },
-  stays_add_btn: { en: 'Add to Trip', cs: 'Přidat do cesty' },
-  stays_checkin: { en: 'Check-in', cs: 'Příjezd' },
-  stays_checkout: { en: 'Check-out', cs: 'Odjezd' },
-  // Memories
-  memories_badge: { en: 'Our Memories', cs: 'Naše vzpomínky' },
-  memories_title_1: { en: 'Captured ', cs: 'Zachyťte ' },
-  memories_title_2: { en: 'Moments', cs: 'momentky' },
-  memories_google_photos: { en: 'View Google Photos Album', cs: 'Zobrazit album v Google Photos' },
-  memories_by: { en: 'By ', cs: 'Od ' },
-  memories_ai_enabled: { en: 'AI Image Generation enabled', cs: 'AI generování obrázků aktivní' },
-  memories_ai_desc: { en: 'I can generate group photos of Karel, Pedro, and Monika based on your itinerary highlights.', cs: 'Můžu vygenerovat skupinové fotky Karla, Pedra a Moniky na základě vašich zážitků.' },
-  celebrate: { en: 'CELEBRATE', cs: 'OSLAVIT' },
-  sidekick_woohoo: { en: 'Woohoo!', cs: 'Jupí!' },
-  itinerary_label: { en: 'Itinerary', cs: 'Itinerář' },
-  days_count: { en: 'Days', cs: 'Dnů' },
-  inspiration_title: { en: 'Trending Inspiration', cs: 'Trendy Inspirace' },
-  stays_btn: { en: 'Stays', cs: 'Ubytování' },
-  packing_btn: { en: 'Packing', cs: 'Balení' },
-  packing_ready: { en: '(Ready)', cs: '(Hotovo)' },
-  packing_in_progress: { en: '(In Progress)', cs: '(Probíhá)' },
-  atlas_title: { en: 'Atlas Library', cs: 'Knihovna Atlas' },
-  places_count: { en: 'places', cs: 'míst' },
-  search_places_title: { en: 'Search Places', cs: 'Hledat místa' },
-  search_placeholder_dest: { en: 'Search in', cs: 'Hledat v' },
-  search_visible_only: { en: 'Search within visible area only', cs: 'Hledat pouze ve viditelné oblasti' },
-  search_results_title: { en: 'Search Results', cs: 'Výsledky Vyhledávání' },
-  clear_search: { en: 'Clear', cs: 'Vymazat' },
-
-  // Chat
-  'chat_header_title': { en: 'Expedition Architect', cs: 'AI Architekt' },
-  'chat_ready_status': { en: 'Ready to Plan', cs: 'Připraven Plánovat' },
-  'chat_welcome_title': { en: 'Start your story...', cs: 'Kam se vydáme?' },
-  'chat_welcome_desc': { en: 'Describe your vibe. E.g. "Foodie trip to Tokyo in December for 2 people."', cs: 'Popište svou ideální cestu. Např: "V prosinci do Tokia pro dva, milujeme jídlo."' },
-  'chat_input_placeholder': { en: 'Describe your expedition...', cs: 'Napište sem...' },
-  'chat_launch_expedition': { en: 'Launch Expedition', cs: 'Spustit Výpravu' },
-
+  saved_count: { en: 'Saved', cs: 'Uloženo' },
+  online: { en: 'Online', cs: 'Online' },
+  hello: { en: 'Hey! 👋', cs: 'Ahoj! 👋' },
   // Map
-  'map_offline': { en: 'Map Interface Offline', cs: 'Mapa je offline' },
-  'map_error': { en: 'The map encountered a glitch. Please try refreshing.', cs: 'V mapě došlo k chybě. Zkuste prosím stránku obnovit.' },
-  'map_recover': { en: 'Recover', cs: 'Obnovit' },
-  'map_duration': { en: 'min duration', cs: 'min trvání' },
-  'map_add_to_day': { en: 'Add to Day', cs: 'Přidat do dne' },
-  'map_in_day': { en: 'In Day', cs: 'V dni' },
-  'map_details': { en: 'Details', cs: 'Detaily' },
-  'map_open_google_maps': { en: 'Open in Google Maps', cs: 'Otevřít v Google Maps' },
-  'map_open_maps': { en: 'Open in Maps', cs: 'Otevřít v Mapách' },
+  map_offline: { en: 'Map Interface Offline', cs: 'Mapa je offline' },
+  map_error: { en: 'The map encountered a glitch. Please try refreshing.', cs: 'V mapě došlo k chybě. Zkuste stránku obnovit.' },
+  map_recover: { en: 'Recover', cs: 'Obnovit' },
+  map_duration: { en: 'min', cs: 'min' },
+  map_add_to_day: { en: 'Add to Day', cs: 'Přidat do dne' },
+  map_in_day: { en: 'In Day', cs: 'V dni' },
+  map_details: { en: 'Details', cs: 'Detaily' },
+  map_open_google_maps: { en: 'Open in Google Maps', cs: 'Otevřít v Google Mapách' },
+  map_open_maps: { en: 'Open Maps', cs: 'Otevřít Mapy' },
+  map_preview: { en: 'Preview', cs: 'Náhled' },
+  unknown_place: { en: 'Unknown Place', cs: 'Neznámé místo' },
+  topbar_exit: { en: 'Exit', cs: 'Odejít' },
+  topbar_trip_title_placeholder: { en: 'Trip Title', cs: 'Název cesty' },
+  topbar_destination_placeholder: { en: 'Destination', cs: 'Destinace' },
+  poi_details_error: { en: 'Could not fetch details', cs: 'Nelze načíst informace' },
+  poi_entrance_fees_hint: { en: 'Check for entrance fees', cs: 'Zkontrolujte případné vstupné' },
+  poi_ai_details_btn: { en: 'AI Details (Sára)', cs: 'AI Detaily (Sára)' },
+  sara_added_notification: { en: 'Sára added activity to Day', cs: 'Sára přidala aktivitu do dne' },
+  sara_removed_notification: { en: 'Sára removed activity from Day', cs: 'Sára odebrala aktivitu ze dne' },
+  itinerary_video_loading: { en: 'Discovering...', cs: 'Objevování...' },
+  // Consolidated redundant library labels
+  search_results_label: { en: 'Intelligence Match', cs: 'Nalezená data' },
+  transit_calculating: { en: 'Calculating route...', cs: 'Počítám trasu...' },
+  transit_estimated: { en: 'estimated', cs: 'odhad' },
+  transit_stops: { en: 'stops', cs: 'zastávek' },
+  transit_no_route: { en: 'No route available', cs: 'Trasa nedostupná' },
+  poi_free: { en: 'Free', cs: 'Zdarma' },
+  timeline_per_person_est: { en: 'Per Person Est.', cs: 'Odhad na osobu' },
+  syncing_sara: { en: 'Syncing with Sára', cs: 'Synchronizace se Sárou' },
+  recent_trips: { en: 'Recent Trips', cs: 'Nedávné cesty' },
+  sidekick_woohoo: { en: 'Woohoo! 🎉', cs: 'Jupí! 🎉' },
 };

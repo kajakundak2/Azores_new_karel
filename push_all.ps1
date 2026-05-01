@@ -1,4 +1,4 @@
-# Azores Expedition 2026 - Deployment Script
+# Expedition Planner - Deployment Script
 # This script builds the app, deploys it to Firebase Hosting, and pushes changes to GitHub.
 
 Write-Host "Starting Deployment Process..." -ForegroundColor Cyan

@@ -13,9 +13,6 @@ export function ExpeditionIntel({ trip, onClose, lang }: ExpeditionIntelProps) {
   const t = (key: string) => TEXTS[key]?.[lang] || key;
   const { logistics } = trip;
   
-  // Custom Intel (hardcoded logic for the requirement)
-  const isAzores = trip.destination.toLowerCase().includes('azor');
-  
   return (
     <motion.div 
       initial={{ opacity: 0, scale: 0.95 }}
@@ -50,18 +47,6 @@ export function ExpeditionIntel({ trip, onClose, lang }: ExpeditionIntelProps) {
           </div>
           
           <div className="bg-white dark:bg-zinc-950/50 rounded-3xl p-6 border border-slate-100 dark:border-white/5 space-y-4 shadow-sm">
-            {isAzores && (
-                <div className="flex items-start gap-4 p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl shadow-sm">
-                    <div className="bg-emerald-500 text-slate-950 p-2 rounded-xl">
-                        <Plane size={20} />
-                    </div>
-                    <div>
-                        <p className="text-sm font-black text-slate-900 dark:text-white">KAREL & PEDRO ARRIVAL</p>
-                        <p className="text-[10px] text-emerald-700 dark:text-emerald-400 font-black uppercase tracking-widest">07:30 AM / TOUCHDOWN</p>
-                    </div>
-                </div>
-            )}
-            
             <div className="space-y-2">
               <div className="flex justify-between items-center text-[10px] font-black text-slate-500 dark:text-slate-500 uppercase tracking-widest px-2">
                 <span>{t('intel_phase')}</span>

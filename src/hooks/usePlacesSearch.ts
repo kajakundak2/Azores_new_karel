@@ -1,10 +1,11 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback } from 'react';
 import { POI, Category } from '../data';
 
 /**
- * Hook for searching places using Google Places API via PlacesService.
- * Requires the `places` library to be loaded via APIProvider.
- * Falls back to a text search when PlacesService isn't available.
+ * Hook for searching places using the NEW Google Places API (Place.searchByText).
+ * Migrated from the deprecated PlacesService to google.maps.places.Place.
+ * 
+ * Requires "Places API (New)" to be enabled in Google Cloud Console.
  */
 
 function categorizeFromTypes(types: string[]): Category {
@@ -16,28 +17,65 @@ function categorizeFromTypes(types: string[]): Category {
   return 'Sightseeing';
 }
 
-function placeResultToPOI(place: google.maps.places.PlaceResult): POI | null {
-  if (!place.geometry?.location) return null;
+/**
+ * Maps priceLevel enum from the new API to a display string.
+ */
+function priceLevelToDisplay(priceLevel: string | undefined | null): string | undefined {
+  if (!priceLevel) return undefined;
+  const map: Record<string, string> = {
+    'FREE': 'Free',
+    'INEXPENSIVE': '$',
+    'MODERATE': '$$',
+    'EXPENSIVE': '$$$',
+    'VERY_EXPENSIVE': '$$$$',
+  };
+  return map[priceLevel] || undefined;
+}
 
-  const photoUrl = place.photos?.[0]?.getUrl({ maxWidth: 800 }) ||
-    'https://images.unsplash.com/photo-1506744038136-46273834b3fb?auto=format&fit=crop&w=800&q=80';
+/**
+ * Converts a new Place API result to our POI format.
+ */
+export function newPlaceToPOI(place: google.maps.places.Place): POI | null {
+  const loc = place.location;
+  if (!loc) return null;
+
+  // Get photo URL from first photo
+  let photoUrl = 'https://images.unsplash.com/photo-1506744038136-46273834b3fb?auto=format&fit=crop&w=800&q=80';
+  const photos: string[] = [];
+  if (place.photos && place.photos.length > 0) {
+    try {
+      photoUrl = place.photos[0].getURI({ maxWidth: 800 }) || photoUrl;
+      photos.push(...place.photos.slice(0, 5).map(p => {
+        try { return p.getURI({ maxWidth: 800 }) || ''; } catch { return ''; }
+      }).filter(Boolean));
+    } catch { /* photo URI failed */ }
+  }
+
+  const name = place.displayName || 'Unknown Place';
+  const editorialSummary = (place as any).editorialSummary || '';
+  const priceLevelStr = priceLevelToDisplay((place as any).priceLevel);
 
   return {
-    id: `places-${place.place_id || Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    title: { en: place.name || 'Unknown Place', cs: place.name || 'Neznámé místo' },
-    description: { en: place.formatted_address || '', cs: place.formatted_address || '' },
+    id: place.id || `places-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    googlePlaceId: place.id ?? undefined,
+    title: { en: name, cs: name },
+    description: editorialSummary ? {
+      en: editorialSummary,
+      cs: editorialSummary,
+    } : undefined,
     category: categorizeFromTypes(place.types || []),
     duration: 60,
     imageUrl: photoUrl,
     location: {
-      lat: place.geometry.location.lat(),
-      lng: place.geometry.location.lng(),
+      lat: loc.lat(),
+      lng: loc.lng(),
     },
-    rating: place.rating,
-    reviewCount: place.user_ratings_total,
-    address: place.formatted_address,
-    googleMapsUrl: place.url || `https://www.google.com/maps/place/?q=place_id:${place.place_id}`,
-    images: place.photos?.slice(0, 5).map(p => p.getUrl({ maxWidth: 800 })),
+    rating: place.rating ?? undefined,
+    reviewCount: (place as any).userRatingCount ?? undefined,
+    address: place.formattedAddress ?? undefined,
+    googleMapsUrl: (place as any).googleMapsURI || `https://www.google.com/maps/place/?q=place_id:${place.id}`,
+    images: photos.length > 0 ? photos : undefined,
+    priceInEuro: priceLevelStr,
   };
 }
 
@@ -53,62 +91,27 @@ export function usePlacesSearch(): PlacesSearchState {
   const [results, setResults] = useState<POI[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const serviceRef = useRef<google.maps.places.PlacesService | null>(null);
 
-  const getService = useCallback(() => {
-    if (serviceRef.current) return serviceRef.current;
-    
-    // PlacesService doesn't strictly need a map — can use a div
-    if (typeof google === 'undefined' || !google.maps?.places?.PlacesService) {
-      return null;
-    }
-    const dummyDiv = document.createElement('div');
-    serviceRef.current = new google.maps.places.PlacesService(dummyDiv);
-    return serviceRef.current;
-  }, []);
-
-  const searchPlaces = useCallback((query: string, location?: { lat: number; lng: number }, searchInBounds?: boolean) => {
+  const searchPlaces = useCallback(async (query: string, location?: { lat: number; lng: number }, searchInBounds?: boolean) => {
     if (!query.trim()) return;
-    
+
     setIsSearching(true);
     setError(null);
 
-    const service = getService();
-    if (!service) {
-      setError('Places service not available. Please enable the Maps JavaScript API.');
-      setIsSearching(false);
-      return;
-    }
-
-    const bounds = searchInBounds ? (window as any).lastMapBounds : undefined;
-
-    const request: google.maps.places.TextSearchRequest = {
-      query,
-      ...(bounds ? { bounds } : location ? {
-        location: new google.maps.LatLng(location.lat, location.lng),
-        radius: 50000, // 50km radius
-      } : {}),
-    };
-
-    service.textSearch(request, (results, status) => {
-      setIsSearching(false);
-      
-      if (status === google.maps.places.PlacesServiceStatus.OK && results) {
-        const pois = results
-          .map(placeResultToPOI)
-          .filter((p): p is POI => p !== null)
-          .slice(0, 12); // Limit to 12 results
-        
-        setResults(pois);
-      } else if (status === google.maps.places.PlacesServiceStatus.ZERO_RESULTS) {
-        setResults([]);
+    try {
+      const pois = await searchPlacesAsync(query, location, searchInBounds);
+      setResults(pois);
+      if (pois.length === 0) {
         setError('No places found. Try a different search.');
-      } else {
-        setError(`Search failed: ${status}`);
-        setResults([]);
       }
-    });
-  }, [getService]);
+    } catch (err: any) {
+      console.error('Places search error:', err);
+      setError(err.message || 'Search failed');
+      setResults([]);
+    } finally {
+      setIsSearching(false);
+    }
+  }, []);
 
   const clearResults = useCallback(() => {
     setResults([]);
@@ -119,42 +122,59 @@ export function usePlacesSearch(): PlacesSearchState {
 }
 
 /**
- * Standalone function to search places (for use in AI tools).
- * Returns a promise-based API.
+ * Standalone function to search places using the NEW Place API.
+ * Returns a promise-based API for use in AI tools.
  */
-export function searchPlacesAsync(
+export async function searchPlacesAsync(
   query: string,
-  location?: { lat: number; lng: number }
+  location?: { lat: number; lng: number },
+  searchInBounds?: boolean
 ): Promise<POI[]> {
-  return new Promise((resolve, reject) => {
-    if (typeof google === 'undefined' || !google.maps?.places?.PlacesService) {
-      reject(new Error('Places service not available'));
-      return;
-    }
+  // Check that the new Place class is available
+  if (typeof google === 'undefined' || !google.maps?.places?.Place) {
+    throw new Error('New Places API not available. Ensure "Places API (New)" is enabled.');
+  }
 
-    const dummyDiv = document.createElement('div');
-    const service = new google.maps.places.PlacesService(dummyDiv);
+  const { Place } = google.maps.places;
 
-    const request: google.maps.places.TextSearchRequest = {
-      query,
-      ...(location ? {
-        location: new google.maps.LatLng(location.lat, location.lng),
-        radius: 50000,
-      } : {}),
-    };
+  const request: google.maps.places.SearchByTextRequest = {
+    textQuery: query,
+    fields: [
+      'id',
+      'displayName',
+      'formattedAddress',
+      'location',
+      'photos',
+      'rating',
+      'userRatingCount',
+      'priceLevel',
+      'editorialSummary',
+      'googleMapsURI',
+      'types',
+      'reviews',
+    ],
+    maxResultCount: 12,
+    language: 'en',
+  };
 
-    service.textSearch(request, (results, status) => {
-      if (status === google.maps.places.PlacesServiceStatus.OK && results) {
-        const pois = results
-          .map(placeResultToPOI)
-          .filter((p): p is POI => p !== null)
-          .slice(0, 8);
-        resolve(pois);
-      } else if (status === google.maps.places.PlacesServiceStatus.ZERO_RESULTS) {
-        resolve([]);
-      } else {
-        reject(new Error(`Places search failed: ${status}`));
-      }
+  // Add location bias if available
+  if (searchInBounds && (window as any).lastMapBounds) {
+    request.locationBias = (window as any).lastMapBounds;
+  } else if (location) {
+    // Create a circle bias centered on the location with 50km radius
+    request.locationBias = new google.maps.Circle({
+      center: new google.maps.LatLng(location.lat, location.lng),
+      radius: 50000,
     });
-  });
+  }
+
+  const { places } = await Place.searchByText(request);
+
+  if (!places || places.length === 0) {
+    return [];
+  }
+
+  return places
+    .map(newPlaceToPOI)
+    .filter((p): p is POI => p !== null);
 }

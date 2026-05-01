@@ -1,4 +1,4 @@
-import { BilingualString } from './itineraryParser';
+import { BilingualString } from './types';
 import { aiTranslator } from './aiTranslator';
 
 export function ensureBilingual(value: string | BilingualString | undefined): BilingualString {

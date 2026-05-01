@@ -33,10 +33,21 @@ class GeminiKeyManager {
     }
   }
 
+  private serviceStatus: 'up' | 'down' = 'up';
+  private lastDownTime: number = 0;
+
   /**
    * Returns the next available API key that isn't on cooldown.
    */
   getNextKey(): string {
+    if (this.serviceStatus === 'down') {
+      const now = Date.now();
+      if (now - this.lastDownTime < 300000) { // 5 minute global cooldown for 503
+        return '';
+      }
+      this.serviceStatus = 'up';
+    }
+
     if (this.keys.length === 0) return '';
 
     const startIdx = this.currentIdx;
@@ -57,6 +68,24 @@ class GeminiKeyManager {
     // If all keys are on cooldown, return the current one anyway (last resort)
     console.warn('GeminiKeyManager: All keys are currently on cooldown. Attempting with current key.');
     return this.keys[this.currentIdx];
+  }
+
+  /**
+   * Reports a global service error (like 503).
+   */
+  reportServiceDown() {
+    this.serviceStatus = 'down';
+    this.lastDownTime = Date.now();
+    console.error('GeminiKeyManager: Global service outage detected. Entering 5-minute cooldown.');
+  }
+
+  isServiceDown(): boolean {
+    if (this.serviceStatus === 'down') {
+      const now = Date.now();
+      if (now - this.lastDownTime < 300000) return true;
+      this.serviceStatus = 'up';
+    }
+    return false;
   }
 
   /**

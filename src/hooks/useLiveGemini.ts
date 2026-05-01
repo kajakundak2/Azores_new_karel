@@ -4,12 +4,12 @@ import { searchPlacesAsync } from './usePlacesSearch';
 import { geminiKeyManager } from '../utils/geminiKeyManager';
 
 interface UseLiveGeminiProps {
-  onUpdateItinerary?: (data: { day: number; activity: string; description?: string; category?: string; type?: string; intensity?: string }) => void;
-  onUpdateTripDetails?: (data: { destination?: string; startDate?: string; endDate?: string; adults?: number; kids?: number; preferences?: string }) => void;
-  onRemoveFromItinerary?: (data: { day: number; activity: string }) => void;
-  onClearDay?: (data: { day: number }) => void;
-  onClearItinerary?: () => void;
-  onTriggerSmartItinerary?: (intensity: string, dayNumbers?: number[]) => void;
+  onUpdateItinerary?: (data: { day: number; activity: string; description?: string; category?: string; type?: string; intensity?: string }) => Promise<void> | void;
+  onUpdateTripDetails?: (data: { destination?: string; startDate?: string; endDate?: string; adults?: number; kids?: number; preferences?: string }) => Promise<void> | void;
+  onRemoveFromItinerary?: (data: { day: number; activity: string }) => Promise<void> | void;
+  onClearDay?: (data: { day: number }) => Promise<void> | void;
+  onClearItinerary?: () => Promise<void> | void;
+  onTriggerSmartItinerary?: (intensity: string, dayNumbers?: number[]) => Promise<void> | void;
   onUploadDoc?: (file: File) => void;
   onRemoteVolumeChange?: (volume: number) => void;
   onVolumeChange?: (volume: number) => void;
@@ -54,6 +54,8 @@ export function useLiveGemini({
     onRemoveFromItinerary,
     onClearDay,
     onClearItinerary,
+    onTriggerSmartItinerary,
+    onUploadDoc,
     onShowUICard,
     onStatusChange,
     onRemoteVolumeChange,
@@ -78,12 +80,29 @@ export function useLiveGemini({
       onMessage,
       onUserMessage
     };
-  }, [onUpdateItinerary, onRemoveFromItinerary, onClearDay, onClearItinerary, onTriggerSmartItinerary, onUploadDoc, onShowUICard, onStatusChange, onRemoteVolumeChange, onVolumeChange, onMessage, onUserMessage]);
+  }, [
+    onUpdateItinerary, 
+    onUpdateTripDetails, 
+    onRemoveFromItinerary, 
+    onClearDay, 
+    onClearItinerary, 
+    onTriggerSmartItinerary, 
+    onUploadDoc, 
+    onShowUICard, 
+    onStatusChange, 
+    onRemoteVolumeChange, 
+    onVolumeChange, 
+    onMessage, 
+    onUserMessage
+  ]);
 
   // Keep ref in sync
   useEffect(() => {
     isActiveRef.current = isActive;
   }, [isActive]);
+
+  // Removing session_update useEffect as it is not supported/needed in mid-call for v1beta Bidi
+  // and was causing "Unknown name session_update" errors.
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -215,9 +234,15 @@ export function useLiveGemini({
   }, []);
 
   const startCall = useCallback(async () => {
+    if (geminiKeyManager.isServiceDown()) {
+      setError('Gemini AI is currently under heavy load (503). Please try again in 5-10 minutes.');
+      onStatusChange?.('error');
+      return;
+    }
+
     const apiKey = geminiKeyManager.getNextKey();
     if (!apiKey) {
-      setError('No API keys available. Please check .env file.');
+      setError('No API keys available or service is cooling down.');
       onStatusChange?.('error');
       return;
     }
@@ -260,9 +285,12 @@ export function useLiveGemini({
         // Adjust 0.3 to change how "fast" she responds. Higher = snappier, Lower = smoother.
         smoothedVolume = smoothedVolume * 0.85 + rms * 0.15;
         
-        // Only report if above noise floor
+        // Only report if above noise floor and significantly different from 0
         const noiseFloor = 0.005;
-        callbacksRef.current.onRemoteVolumeChange?.(smoothedVolume > noiseFloor ? smoothedVolume : 0);
+        const finalVol = smoothedVolume > noiseFloor ? smoothedVolume : 0;
+        if (finalVol > 0 || smoothedVolume > 0.01) {
+           callbacksRef.current.onRemoteVolumeChange?.(finalVol);
+        }
         
         animationFrameRef.current = requestAnimationFrame(analyzeVolume);
       };
@@ -281,33 +309,33 @@ export function useLiveGemini({
       streamRef.current = stream;
 
       const source = audioContext.createMediaStreamSource(stream);
-      const processor = audioContext.createScriptProcessor(4096, 1, 1);
-      processorRef.current = processor;
+      
+      // Migration to AudioWorklet (removes ScriptProcessorNode deprecation)
+      await audioContext.audioWorklet.addModule('/pcm-processor.worklet.js');
+      const workletNode = new AudioWorkletNode(audioContext, 'pcm-processor');
+      processorRef.current = workletNode;
 
-      // 2. Initialize WebSocket to Gemini Live API
-      const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${apiKey}`;
+      // 2. Initialize WebSocket to Gemini Live API (Use v1beta for 3.1)
+      const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${apiKey}`;
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
       ws.onopen = () => {
-        // Send Setup Message as first message (per AI instructions.md)
+        // Send Setup Message as first message (per AI instructions.md and server error 1007)
+        // Reverting to models/gemini-3.1-flash-live-preview and using snake_case as required by v1beta Bidi
         const setupMessage = {
           setup: {
             model: "models/gemini-3.1-flash-live-preview",
-            generationConfig: {
-              responseModalities: ["AUDIO"],
-              speechConfig: {
-                voiceConfig: { prebuiltVoiceConfig: { voiceName: "Aoede" } },
-                languageCode: lang === 'cs' ? 'cs-CZ' : 'en-US'
-              },
-              // Use thinkingLevel for 3.1 Flash Live inside generationConfig
-              thinkingConfig: {
-                thinkingLevel: "minimal"
+            generation_config: {
+              response_modalities: ["AUDIO"],
+              speech_config: {
+                voice_config: { 
+                  prebuilt_voice_config: { voice_name: "Aoede" } 
+                }
               }
             },
-            inputAudioTranscription: {},
-            outputAudioTranscription: {},
-            systemInstruction: {
+            // thinking_config: { thinking_level: 'minimal' }, // From AI instructions.md
+            system_instruction: {
               parts: [{
                 text: systemInstruction || 'You are "Sara," a knowledgeable and friendly travel planning assistant.'
               }]
@@ -354,13 +382,13 @@ export function useLiveGemini({
                   parameters: {
                     type: "OBJECT",
                     properties: {
-                      destination: { type: "STRING", description: "The trip destination (e.g., 'São Miguel, Azores')" },
+                      destination: { type: "STRING", description: "The trip destination (e.g., 'Paris, France')" },
                       startDate: { type: "STRING", description: "Start date in YYYY-MM-DD format" },
                       endDate: { type: "STRING", description: "End date in YYYY-MM-DD format" },
                       adults: { type: "NUMBER", description: "Number of adult travelers" },
                       kids: { type: "NUMBER", description: "Number of children" },
                       preferences: { type: "STRING", description: "General travel preferences or requests." },
-                      planningMode: { type: "STRING", enum: ["full", "suggestions_only"], description: "Whether to plan all days or just give suggestions." }
+                      planningMode: { type: "STRING", enum: ["relaxed", "balanced", "packed"], description: "The pace of the trip." }
                     }
                   }
                 },
@@ -389,7 +417,7 @@ export function useLiveGemini({
                   parameters: {
                     type: "OBJECT",
                     properties: {
-                      planningMode: { type: "STRING", enum: ["full", "suggestions_only"], description: "The user's choice: 'full' for a day-by-day plan, 'suggestions_only' for just a list of POIs." }
+                      planningMode: { type: "STRING", enum: ["relaxed", "balanced", "packed"], description: "The user's preferred intensity for the generated itinerary." }
                     }
                   }
                 },
@@ -406,7 +434,7 @@ export function useLiveGemini({
                   }
                 },
                 {
-                  name: 'searchGooglePlaces',
+                  name: 'search_google_places',
                   description: 'Search for a real point of interest (restaurant, trail, location, city, event etc.). Returns real places with photos and ratings.',
                   parameters: {
                     type: 'OBJECT',
@@ -415,7 +443,7 @@ export function useLiveGemini({
                   }
                 },
                 {
-                  name: 'searchFlights',
+                  name: 'search_flights',
                   description: 'Search for flight options to the destination.',
                   parameters: {
                     type: 'OBJECT',
@@ -470,7 +498,6 @@ export function useLiveGemini({
 
       ws.onmessage = async (event) => {
         try {
-          // Handle both string and Blob data
           let messageText: string;
           if (typeof event.data === 'string') {
             messageText = event.data;
@@ -481,116 +508,116 @@ export function useLiveGemini({
           }
 
           const response = JSON.parse(messageText);
-          console.log('Gemini WS Message:', response);
+          const isSetupComplete = response.setupComplete || response.setup_complete;
+          const serverContent = response.serverContent || response.server_content;
+          const toolCall = response.toolCall || response.tool_call;
 
-          if (response.setupComplete) {
+          if (isSetupComplete) {
             setupComplete = true;
             onStatusChange?.('connected');
+            const workletNode = processorRef.current as AudioWorkletNode;
+            if (workletNode) {
+              source.connect(workletNode);
 
-            // Start streaming audio after setup
-            source.connect(processor);
+              const silentGain = audioContext.createGain();
+              silentGain.gain.value = 0;
+              workletNode.connect(silentGain);
+              silentGain.connect(audioContext.destination);
 
-            // Connect processor to a silent gain node to fire onaudioprocess without audio feedback
-            const silentGain = audioContext.createGain();
-            silentGain.gain.value = 0;
-            processor.connect(silentGain);
-            silentGain.connect(audioContext.destination);
+              workletNode.port.onmessage = (event) => {
+                if (ws.readyState === WebSocket.OPEN && setupComplete) {
+                  const inputData = event.data as Float32Array;
+                  const pcmData = AudioProcessor.toPCM16(inputData);
+                  const base64Audio = AudioProcessor.arrayBufferToBase64(pcmData.buffer);
 
-            processor.onaudioprocess = (e) => {
-              if (ws.readyState === WebSocket.OPEN && setupComplete) {
-                const inputData = e.inputBuffer.getChannelData(0);
-                const pcmData = AudioProcessor.toPCM16(inputData);
-                const base64Audio = AudioProcessor.arrayBufferToBase64(pcmData.buffer);
-
-                ws.send(JSON.stringify({
-                  realtimeInput: {
-                    audio: {
-                      mimeType: "audio/pcm;rate=16000",
-                      data: base64Audio
+                  ws.send(JSON.stringify({
+                    realtime_input: {
+                      audio: {
+                        mime_type: "audio/pcm;rate=16000",
+                        data: base64Audio
+                      }
                     }
-                  }
-                }));
+                  }));
 
-                // Volume meter for UI
-                let sum = 0;
-                for (let i = 0; i < inputData.length; i++) sum += inputData[i] * inputData[i];
-                onVolumeChange?.(Math.sqrt(sum / inputData.length));
-              }
-            };
+                  let sum = 0;
+                  for (let i = 0; i < inputData.length; i++) sum += inputData[i] * inputData[i];
+                  const vol = Math.sqrt(sum / inputData.length);
+                  if (vol > 0.05) {
+                    onVolumeChange?.(vol);
+                  } else if (vol < 0.01) {
+                     onVolumeChange?.(0);
+                  }
+                }
+              };
+            }
             return;
           }
 
           // Handle interruption
-          if (response.serverContent?.interrupted) {
+          if (serverContent?.interrupted) {
             console.log('Gemini Live: Interrupted by user speech');
             stopAllAudio();
           }
 
           // Handle Audio & Text responses
-          if (response.serverContent) {
-            const { modelTurn, userContent, inputTranscription, outputTranscription } = response.serverContent;
+          if (serverContent) {
+            const { modelTurn, userContent, inputTranscription, outputTranscription } = serverContent;
+            const model_turn = modelTurn || serverContent.model_turn;
+            const input_trans = inputTranscription || serverContent.input_transcription;
+            const output_trans = outputTranscription || serverContent.output_transcription;
 
-            // 1. Handle Model Audio Response (modelTurn)
-            if (modelTurn?.parts) {
-              for (const part of modelTurn.parts) {
-                if (part.inlineData?.data) {
-                  playPCMAudio(part.inlineData.data);
+            // 1. Handle Model Audio Response
+            if (model_turn?.parts) {
+              for (const part of model_turn.parts) {
+                if (part.inlineData?.data || part.inline_data?.data) {
+                  playPCMAudio(part.inlineData?.data || part.inline_data?.data);
                 }
-                // Note: Standard parts might also contain text if responseModalities=["TEXT"]
                 if (part.text) {
                   onMessage?.(part.text);
                 }
               }
             }
 
-            // 2. Handle User Transcription (the words you just said)
-            const inputTrans = inputTranscription || (response.serverContent as any).input_transcription;
-            if (inputTrans) {
-              console.log('Gemini Live User:', inputTrans.text);
-              onUserMessage?.(inputTrans.text, inputTrans.isFinal);
+            // 2. Handle User Transcription
+            if (input_trans) {
+              onUserMessage?.(input_trans.text, input_trans.isFinal || input_trans.is_final);
             }
 
-            // 3. Handle Model Transcription (the words AI is speaking)
-            const outputTrans = outputTranscription || (response.serverContent as any).output_transcription;
-            if (outputTrans) {
-              console.log('Gemini Live AI:', outputTrans.text);
-              onMessage?.(outputTrans.text);
+            // 3. Handle Model Transcription
+            if (output_trans) {
+              onMessage?.(output_trans.text);
             }
           }
 
           // Handle Function Call responses
-          if (response.toolCall?.functionCalls) {
-            for (const functionCall of response.toolCall.functionCalls) {
+          const functionCalls = toolCall?.functionCalls || toolCall?.function_calls;
+          if (functionCalls) {
+            for (const functionCall of functionCalls) {
               const { name, args, id } = functionCall;
+              console.log('Gemini Live Tool Call:', name, args);
+
+              const sendResponse = (resp: any) => {
+                if (ws.readyState === WebSocket.OPEN) {
+                  ws.send(JSON.stringify({
+                    tool_response: {
+                      function_responses: [{
+                        id,
+                        name,
+                        response: resp
+                      }]
+                    }
+                  }));
+                }
+              };
+
               if (name === 'update_itinerary' && args) {
-                // Await the callback so we can catch errors and report them back to Gemini
                 const processCall = async () => {
                   try {
                     await callbacksRef.current.onUpdateItinerary?.(args as any);
-                    if (ws.readyState === WebSocket.OPEN) {
-                      ws.send(JSON.stringify({
-                        toolResponse: {
-                          functionResponses: [{
-                            id,
-                            name,
-                            response: { success: true, message: `Updated Day ${args.day} with: ${args.activity}` }
-                          }]
-                        }
-                      }));
-                    }
+                    sendResponse({ success: true, message: `Updated Day ${args.day} with: ${args.activity}` });
                   } catch (err: any) {
-                    console.error('Voice assistant tool execution failed:', err);
-                    if (ws.readyState === WebSocket.OPEN) {
-                      ws.send(JSON.stringify({
-                        toolResponse: {
-                          functionResponses: [{
-                            id,
-                            name,
-                            response: { success: false, message: `Failed to update itinerary: ${err.message || 'Unknown error'}` }
-                          }]
-                        }
-                      }));
-                    }
+                    console.error('Voice tool execution failed:', err);
+                    sendResponse({ success: false, message: `Failed: ${err.message || 'Unknown error'}` });
                   }
                 };
                 processCall();
@@ -598,29 +625,9 @@ export function useLiveGemini({
                 const processRemove = async () => {
                   try {
                     await callbacksRef.current.onRemoveFromItinerary?.(args as any);
-                    if (ws.readyState === WebSocket.OPEN) {
-                      ws.send(JSON.stringify({
-                        toolResponse: {
-                          functionResponses: [{
-                            id,
-                            name,
-                            response: { success: true, message: `Removed "${args.activity}" from Day ${args.day}` }
-                          }]
-                        }
-                      }));
-                    }
+                    sendResponse({ success: true, message: `Removed "${args.activity}" from Day ${args.day}` });
                   } catch (err: any) {
-                    if (ws.readyState === WebSocket.OPEN) {
-                      ws.send(JSON.stringify({
-                        toolResponse: {
-                          functionResponses: [{
-                            id,
-                            name,
-                            response: { success: false, message: `Failed to remove: ${err.message}` }
-                          }]
-                        }
-                      }));
-                    }
+                    sendResponse({ success: false, message: `Failed to remove: ${err.message}` });
                   }
                 }
                 processRemove();
@@ -628,29 +635,9 @@ export function useLiveGemini({
                 const processUpdate = async () => {
                   try {
                     await callbacksRef.current.onUpdateTripDetails?.(args as any);
-                    if (ws.readyState === WebSocket.OPEN) {
-                      ws.send(JSON.stringify({
-                        toolResponse: {
-                          functionResponses: [{
-                            id,
-                            name,
-                            response: { success: true, message: `Updated trip parameters: ${Object.keys(args).join(', ')}` }
-                          }]
-                        }
-                      }));
-                    }
+                    sendResponse({ success: true, message: `Updated trip parameters: ${Object.keys(args).join(', ')}` });
                   } catch (err: any) {
-                    if (ws.readyState === WebSocket.OPEN) {
-                      ws.send(JSON.stringify({
-                        toolResponse: {
-                          functionResponses: [{
-                            id,
-                            name,
-                            response: { success: false, message: `Failed to update details: ${err.message}` }
-                          }]
-                        }
-                      }));
-                    }
+                    sendResponse({ success: false, message: `Failed to update details: ${err.message}` });
                   }
                 }
                 processUpdate();
@@ -658,19 +645,9 @@ export function useLiveGemini({
                 const processClearDay = async () => {
                   try {
                     await callbacksRef.current.onClearDay?.(args as any);
-                    if (ws.readyState === WebSocket.OPEN) {
-                      ws.send(JSON.stringify({
-                        toolResponse: {
-                          functionResponses: [{ id, name, response: { success: true, message: `Cleared activities for Day ${args.day}` } }]
-                        }
-                      }));
-                    }
+                    sendResponse({ success: true, message: `Cleared activities for Day ${args.day}` });
                   } catch (err: any) {
-                    if (ws.readyState === WebSocket.OPEN) {
-                      ws.send(JSON.stringify({
-                        toolResponse: { functionResponses: [{ id, name, response: { success: false, message: `Failed to clear: ${err.message}` } }] }
-                      }));
-                    }
+                    sendResponse({ success: false, message: `Failed to clear: ${err.message}` });
                   }
                 };
                 processClearDay();
@@ -678,19 +655,9 @@ export function useLiveGemini({
                 const processClearAll = async () => {
                   try {
                     await callbacksRef.current.onClearItinerary?.();
-                    if (ws.readyState === WebSocket.OPEN) {
-                      ws.send(JSON.stringify({
-                        toolResponse: {
-                          functionResponses: [{ id, name, response: { success: true, message: `Cleared entire itinerary successfully.` } }]
-                        }
-                      }));
-                    }
+                    sendResponse({ success: true, message: `Cleared entire itinerary successfully.` });
                   } catch (err: any) {
-                    if (ws.readyState === WebSocket.OPEN) {
-                      ws.send(JSON.stringify({
-                        toolResponse: { functionResponses: [{ id, name, response: { success: false, message: `Failed to clear: ${err.message}` } }] }
-                      }));
-                    }
+                    sendResponse({ success: false, message: `Failed to clear: ${err.message}` });
                   }
                 };
                 processClearAll();
@@ -699,89 +666,35 @@ export function useLiveGemini({
                   try {
                     const { intensity, dayNumbers } = args as any;
                     await callbacksRef.current.onTriggerSmartItinerary?.(intensity, dayNumbers);
-                    if (ws.readyState === WebSocket.OPEN) {
-                      ws.send(JSON.stringify({
-                        toolResponse: {
-                          functionResponses: [{ id, name, response: { success: true, message: `Started smart generation with intensity: ${intensity || 'balanced'}. Tell the user to wait a few seconds.` } }]
-                        }
-                      }));
-                    }
+                    sendResponse({ success: true, message: `Started smart generation with intensity: ${intensity || 'balanced'}. Tell the user to wait a few seconds.` });
                   } catch (err: any) {
-                    if (ws.readyState === WebSocket.OPEN) {
-                      ws.send(JSON.stringify({
-                        toolResponse: {
-                          functionResponses: [{ id, name, response: { success: false, message: `Failed: ${err.message}` } }]
-                        }
-                      }));
-                    }
+                    sendResponse({ success: false, message: `Failed: ${err.message}` });
                   }
                 };
                 processSmart();
               } else if (name === 'generate_itinerary' && args) {
                 const processLaunch = async () => {
                   try {
-                    if (ws.readyState === WebSocket.OPEN) {
-                      ws.send(JSON.stringify({
-                        toolResponse: {
-                          functionResponses: [{
-                            id,
-                            name,
-                            response: { success: true, message: `Launching itinerary with mode: ${args.planningMode}` }
-                          }]
-                        }
-                      }));
-                    }
-                    // Small delay to ensure the WS message is sent before state changes potentially unmount this component
+                    sendResponse({ success: true, message: `Launching itinerary with mode: ${args.planningMode}` });
                     await new Promise(r => setTimeout(r, 100));
                     await callbacksRef.current.onUpdateItinerary?.({ ...args, type: 'launch_itinerary' });
                   } catch (err: any) {
-                    if (ws.readyState === WebSocket.OPEN) {
-                      ws.send(JSON.stringify({
-                        toolResponse: {
-                          functionResponses: [{
-                            id,
-                            name,
-                            response: { success: false, message: `Failed to launch: ${err.message}` }
-                          }]
-                        }
-                      }));
-                    }
+                    sendResponse({ success: false, message: `Failed to launch: ${err.message}` });
                   }
                 }
                 processLaunch();
-              } else if (name === 'searchGooglePlaces' && args) {
+              } else if (name === 'search_google_places' && args) {
                 const query = (args as any).query;
-                // Use the standalone search helper
                 searchPlacesAsync(query).then(results => {
                   if (results.length > 0) {
                     callbacksRef.current.onShowUICard?.(results[0]);
                   }
-                  if (ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify({
-                      toolResponse: {
-                        functionResponses: [{
-                          id,
-                          name,
-                          response: { success: true, message: `Displayed card for ${results[0]?.title.en || query}` }
-                        }]
-                      }
-                    }));
-                  }
+                  sendResponse({ results: results.slice(0, 3) });
                 }).catch(err => {
-                  if (ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify({
-                      toolResponse: {
-                        functionResponses: [{
-                          id,
-                          name,
-                          response: { success: false, message: `Search failed: ${err.message}` }
-                        }]
-                      }
-                    }));
-                  }
+                  sendResponse({ success: false, message: `Search failed: ${err.message}` });
                 });
-              } else if (name === 'searchFlights' && args) {
-                const { origin, date } = args as any;
+              } else if (name === 'search_flights' && args) {
+                const { origin } = args as any;
                 callbacksRef.current.onShowUICard?.({
                   id: 'mock-flight-' + Date.now(),
                   title: { en: `Flight: ${origin} ✈️ Destination`, cs: `Let: ${origin} ✈️ Cíl` },
@@ -789,44 +702,14 @@ export function useLiveGemini({
                   duration: 240,
                   imageUrl: 'https://images.unsplash.com/photo-1436491865332-7a615061c443?auto=format&fit=crop&q=80&w=800',
                 });
-                if (ws.readyState === WebSocket.OPEN) {
-                  ws.send(JSON.stringify({
-                    toolResponse: {
-                      functionResponses: [{
-                        id,
-                        name,
-                        response: { success: true, message: `Showed flights for ${origin}` }
-                      }]
-                    }
-                  }));
-                }
+                sendResponse({ success: true, message: `Showed flights for ${origin}` });
               } else if (name === 'set_traveler_profiles' && args) {
                 const processProfiles = async () => {
                   try {
                     await callbacksRef.current.onUpdateTripDetails?.(args as any);
-                    if (ws.readyState === WebSocket.OPEN) {
-                      ws.send(JSON.stringify({
-                        toolResponse: {
-                          functionResponses: [{
-                            id,
-                            name,
-                            response: { success: true, message: `Updated ${args.travelers.length} traveler profiles.` }
-                          }]
-                        }
-                      }));
-                    }
+                    sendResponse({ success: true, message: `Updated ${args.travelers?.length || 0} traveler profiles.` });
                   } catch (err: any) {
-                    if (ws.readyState === WebSocket.OPEN) {
-                      ws.send(JSON.stringify({
-                        toolResponse: {
-                          functionResponses: [{
-                            id,
-                            name,
-                            response: { success: false, message: `Failed to update traveler profiles: ${err.message}` }
-                          }]
-                        }
-                      }));
-                    }
+                    sendResponse({ success: false, message: `Failed to update traveler profiles: ${err.message}` });
                   }
                 };
                 processProfiles();
@@ -834,32 +717,14 @@ export function useLiveGemini({
                 const processPacking = async () => {
                   try {
                     await callbacksRef.current.onUpdateTripDetails?.({ packingRequirements: (args as any).requirements });
-                    if (ws.readyState === WebSocket.OPEN) {
-                      ws.send(JSON.stringify({
-                        toolResponse: {
-                          functionResponses: [{
-                            id,
-                            name,
-                            response: { success: true, message: `Updated packing requirements.` }
-                          }]
-                        }
-                      }));
-                    }
+                    sendResponse({ success: true, message: `Updated packing requirements.` });
                   } catch (err: any) {
-                    if (ws.readyState === WebSocket.OPEN) {
-                      ws.send(JSON.stringify({
-                        toolResponse: {
-                          functionResponses: [{
-                            id,
-                            name,
-                            response: { success: false, message: `Failed to update packing requirements: ${err.message}` }
-                          }]
-                        }
-                      }));
-                    }
+                    sendResponse({ success: false, message: `Failed to update packing requirements: ${err.message}` });
                   }
                 };
                 processPacking();
+              } else {
+                sendResponse({ success: true, message: `Tool ${name} executed (no side effect).` });
               }
             }
           }

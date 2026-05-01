@@ -2,7 +2,7 @@
 
 ## 🤖 Preferred Model
 **Model Name:** `gemini-3.1-flash-lite-preview`
-**Rationale:** This model provides the best balance of speed, rate limit headers, and multimodal performance for the Azores Expedition platform's itinerary parsing and voice interaction features. Avoid using older models (Pro/Flash standard) unless specifically required for high-reasoning tasks.
+**Rationale:** This model provides the best balance of speed, rate limit headers, and multimodal performance for the platform's itinerary parsing and voice interaction features. Avoid using older models (Pro/Flash standard) unless specifically required for high-reasoning tasks.
 
 ## 🎨 UI & Design Standards
 *   **Dark Mode Background:** Use `bg-zinc-950` (Tailwind) or `#09090b` (for inline styles/overrides like Google Maps InfoWindows).

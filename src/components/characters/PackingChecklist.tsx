@@ -40,21 +40,21 @@ const CATEGORY_ICONS: Record<string, string> = {
   misc: '📦',
 };
 
-const CATEGORY_LABELS: Record<string, Record<string, string>> = {
-  clothing: { en: 'Clothing', cs: 'Oblečení' },
-  electronics: { en: 'Electronics', cs: 'Elektronika' },
-  documents: { en: 'Documents', cs: 'Dokumenty' },
-  toiletries: { en: 'Toiletries', cs: 'Hygiena' },
-  health: { en: 'Health', cs: 'Zdraví' },
-  misc: { en: 'Other', cs: 'Ostatní' },
+const CATEGORY_LABEL_KEY: Record<string, string> = {
+  clothing: 'packing_cat_clothing',
+  electronics: 'packing_cat_electronics',
+  documents: 'packing_cat_documents',
+  toiletries: 'packing_cat_toiletries',
+  health: 'packing_cat_health',
+  misc: 'packing_cat_misc',
 };
 
 const GENDER_ICON: Record<string, any> = { male: UserRound, female: User, child: Baby, unspecified: UserRound };
-const GENDER_LABEL: Record<string, Record<string, string>> = {
-  male: { en: 'Man', cs: 'Muž' },
-  female: { en: 'Woman', cs: 'Žena' },
-  child: { en: 'Child', cs: 'Dítě' },
-  unspecified: { en: 'Traveler', cs: 'Cestovatel' }
+const GENDER_LABEL_KEY: Record<string, string> = {
+  male: 'packing_male',
+  female: 'packing_female',
+  child: 'packing_child',
+  unspecified: 'packing_unspecified'
 };
 
 // ── localStorage helpers ─────────────────────────────────────────────────────
@@ -96,7 +96,7 @@ export function PackingChecklist({
     // Auto-create based on travelersCount
     const defaults: TravelerProfile[] = Array.from({ length: travelersCount }).map((_, i) => ({
       id: `t-${Date.now()}-${i}`,
-      name: `Traveler ${i + 1}`,
+      name: `${TEXTS['packing_traveler']?.[lang] || 'Traveler'} ${i + 1}`,
       gender: 'unspecified'
     }));
     return defaults;
@@ -282,7 +282,7 @@ Return ONLY a JSON array: [{"text":"...","category":"..."}]
 Generate 18-25 practical items.`;
 
         const result = await ai.models.generateContent({
-          model: 'gemini-3-flash-preview',
+          model: 'gemini-3.1-flash-lite-preview',
           contents: [{ role: 'user', parts: [{ text: prompt }] }],
         });
 
@@ -475,7 +475,7 @@ Generate 18-25 practical items.`;
                         return (
                           <button
                             key={g}
-                            title={GENDER_LABEL[g][lang] || g}
+                            title={t(GENDER_LABEL_KEY[g])}
                             onClick={ev => { ev.stopPropagation(); updateProfile(profile.id, { gender: g }); }}
                             className={`p-1 rounded-md transition-all ${
                               active
@@ -554,7 +554,7 @@ Generate 18-25 practical items.`;
               </h3>
               {selectedProfile && (
                 <p className={`text-[9px] font-black uppercase tracking-widest mt-0.5 ${cls.subtext}`}>
-                  {GENDER_LABEL[selectedProfile.gender]?.[lang] || selectedProfile.gender}
+                  {t(GENDER_LABEL_KEY[selectedProfile.gender])}
                   {' • '}
                   {completedItems}/{totalItems} {t('packing_packed')}
                 </p>
@@ -586,7 +586,7 @@ Generate 18-25 practical items.`;
                   onClick={() => setActiveCategory(activeCategory === cat ? null : cat)}
                   className={`px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest whitespace-nowrap transition-all ${activeCategory === cat ? 'bg-emerald-500 text-white' : cls.tabInactive}`}
                 >
-                  {CATEGORY_ICONS[cat]} {CATEGORY_LABELS[cat][lang] || cat} ({count})
+                  {CATEGORY_ICONS[cat]} {t(CATEGORY_LABEL_KEY[cat])} ({count})
                 </button>
               );
             })}

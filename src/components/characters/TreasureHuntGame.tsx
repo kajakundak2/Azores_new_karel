@@ -74,7 +74,7 @@ export function TreasureHuntGame({ isOpen, onClose, onComplete, destination, the
         : `Generate 3 interesting trivia questions about the destination: ${destination}. The response MUST be exactly JSON without markdown formatting. Array of objects: [{ "question": "Question text", "options": ["Option A", "B", "C", "D"], "correctOptionIndex": 0, "clue": "Short explanation or interesting fact for the answer" }]`;
       
       const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model: 'gemini-3.1-flash-lite-preview',
         contents: prompt,
         config: { responseMimeType: "application/json" }
       });

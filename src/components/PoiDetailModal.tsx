@@ -1,6 +1,10 @@
 import React, { useState } from 'react';
-import { Star, MapPin, Clock, ExternalLink, X, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Star, MapPin, Clock, ExternalLink, X, ChevronLeft, ChevronRight, Loader2, Sparkles } from 'lucide-react';
 import { POI, TEXTS } from '../data';
+import { translate } from '../utils/bilingualUtils';
+import { enrichPlaceWithAi } from '../utils/itineraryParser';
+import { createT } from '../utils/i18n';
+import { formatPrice } from '../utils/priceUtils';
 
 interface PoiDetailModalProps {
   poi: POI;
@@ -11,25 +15,36 @@ interface PoiDetailModalProps {
   theme: 'light' | 'dark';
   currency: 'EUR' | 'CZK' | 'USD';
   rates: Record<string, number>;
+  onEnrich?: (p: POI) => void;
 }
 
-export function PoiDetailModal({ poi, lang, onClose, onAdd, activeDayIndex, theme, currency, rates }: PoiDetailModalProps) {
-  const t = (key: string) => TEXTS[key]?.[lang] || key;
+export function PoiDetailModal({ poi, lang, onClose, onAdd, activeDayIndex, theme, currency, rates, onEnrich }: PoiDetailModalProps) {
+  const t = createT(lang);
   const [currentImg, setCurrentImg] = useState(0);
+  const [isEnriching, setIsEnriching] = useState(false);
+
+  const handleEnrich = async () => {
+    if (isEnriching) return;
+    setIsEnriching(true);
+    try {
+      const loc = poi.location ? { lat: poi.location.lat, lng: poi.location.lng } : undefined;
+      const metrics = await enrichPlaceWithAi(poi.title.en, loc);
+      const enhancedPoi: POI = {
+        ...poi,
+        description: metrics.description,
+        cost: metrics.cost,
+        duration: metrics.duration || poi.duration || 60
+      };
+      if (onEnrich) onEnrich(enhancedPoi);
+    } catch (e) {
+      console.error(e);
+      alert(t('poi_details_error'));
+    }
+    setIsEnriching(false);
+  };
 
   const getConvertedPrice = () => {
-    if (!poi.priceInEuro) return null;
-    const numericPart = poi.priceInEuro.replace(/[^0-9.]/g, '');
-    const amount = parseFloat(numericPart);
-    if (isNaN(amount)) return poi.priceInEuro; // Fallback to original string
-
-    const rate = rates[currency] || 1;
-    const finalAmount = amount * rate;
-
-    return new Intl.NumberFormat(lang === 'cs' ? 'cs-CZ' : 'en-US', {
-      style: 'currency',
-      currency: currency
-    }).format(finalAmount);
+    return formatPrice(poi.cost, poi.priceInEuro, currency || 'EUR', rates || {}, lang);
   };
 
   const convertedPrice = getConvertedPrice();
@@ -58,7 +73,7 @@ export function PoiDetailModal({ poi, lang, onClose, onAdd, activeDayIndex, them
         <div className="relative w-full h-64 md:h-80 bg-slate-200 shrink-0 group">
            <img 
             src={images[currentImg]} 
-            alt={poi.title[lang]} 
+            alt={translate(poi.title, lang)} 
             className="w-full h-full object-cover"
           />
           
@@ -105,7 +120,7 @@ export function PoiDetailModal({ poi, lang, onClose, onAdd, activeDayIndex, them
           
           {/* Title and Stats */}
           <div className="mb-6 text-left">
-            <h2 className={`text-2xl md:text-3xl font-black mb-1 uppercase tracking-tight ${theme === 'dark' ? 'text-white' : 'text-slate-950'}`}>{poi.title[lang]}</h2>
+            <h2 className={`text-2xl md:text-3xl font-black mb-1 uppercase tracking-tight ${theme === 'dark' ? 'text-white' : 'text-slate-950'}`}>{translate(poi.title, lang)}</h2>
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
                {poi.rating && (
                 <div className="flex items-center gap-1">
@@ -120,14 +135,21 @@ export function PoiDetailModal({ poi, lang, onClose, onAdd, activeDayIndex, them
               )}
               <span className="text-slate-500">•</span>
               <span className="text-slate-500">{poi.category}</span>
-              {convertedPrice && (
+              {convertedPrice ? (
                 <>
                   <span className="text-slate-500">•</span>
                   <span className={`font-bold ${theme === 'dark' ? 'text-emerald-400' : 'text-emerald-600'}`}>
                     {convertedPrice}
                   </span>
                 </>
-              )}
+              ) : (poi.category === 'Sightseeing' || poi.category === 'Activity') ? (
+                <>
+                  <span className="text-slate-500">•</span>
+                  <span className={`flex items-center gap-1 font-bold ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>
+                    🎟 {t('poi_entrance_fees_hint')}
+                  </span>
+                </>
+              ) : null}
             </div>
           </div>
 
@@ -161,11 +183,26 @@ export function PoiDetailModal({ poi, lang, onClose, onAdd, activeDayIndex, them
                 {t('poi_book_online')}
               </a>
             )}
+            
+            {onEnrich && (!poi.description || !poi.cost) && (
+              <button
+                onClick={handleEnrich}
+                disabled={isEnriching}
+                className={`flex items-center gap-2 px-6 py-2.5 border font-black rounded-full transition-colors text-sm shrink-0 shadow-sm ${
+                  theme === 'dark' 
+                    ? 'border-fuchsia-500/30 hover:bg-fuchsia-500/10 text-fuchsia-400 disabled:opacity-50' 
+                    : 'border-fuchsia-200 hover:bg-fuchsia-50 text-fuchsia-600 disabled:opacity-50'
+                }`}
+              >
+                {isEnriching ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                {t('poi_ai_details_btn')}
+              </button>
+            )}
           </div>
 
           {/* Details List */}
           <div className="space-y-6 text-[15px]">
-            {poi.address && (
+            {poi.address && !poi.address.toLowerCase().startsWith(translate(poi.title, lang).toLowerCase()) && (
               <div className={`flex items-start gap-4 ${theme === 'dark' ? 'text-slate-300' : 'text-slate-900'}`}>
                 <MapPin className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
                 <span>{poi.address}</span>
@@ -174,13 +211,13 @@ export function PoiDetailModal({ poi, lang, onClose, onAdd, activeDayIndex, them
             
             <div className={`flex items-start gap-4 ${theme === 'dark' ? 'text-slate-300' : 'text-slate-900'}`}>
               <Clock className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
-              <span>{Math.floor(poi.duration / 60)}h {poi.duration % 60 > 0 ? `${poi.duration % 60}m` : ''}{t('poi_duration_suffix')}</span>
+              <span>{Math.floor(poi.duration / 60)}h {poi.duration % 60 > 0 ? `${poi.duration % 60}m` : ''}</span>
             </div>
 
             <div className={`pt-4 border-t ${theme === 'dark' ? 'border-white/5' : 'border-slate-200'}`}>
-              <p className={`leading-relaxed italic ${theme === 'dark' ? 'text-slate-400' : 'text-slate-600'}`}>
-                {poi.description?.[lang] || poi.description?.en || t('poi_no_description')}
-              </p>
+              <div className={`leading-relaxed ${theme === 'dark' ? 'text-slate-300' : 'text-slate-700'}`}>
+                {translate(poi.description, lang) || t('poi_no_description')}
+              </div>
             </div>
           </div>
 

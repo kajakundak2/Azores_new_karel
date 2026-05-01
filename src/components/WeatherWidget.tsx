@@ -36,8 +36,10 @@ function getWeatherCondition(code: number): 'sunny' | 'cloudy' | 'rainy' {
   return 'cloudy';
 }
 
-// Simple global cache to prevent redundant fetches across multiple instances
+// Global caches to prevent redundant fetches across multiple instances
 const weatherCache: Record<string, { data: WeatherDay[], isHistorical: boolean }> = {};
+const geocodeCache: Record<string, any> = {};
+const fetchPromises: Record<string, Promise<any>> = {};
 
 export function WeatherWidget({ destination, startDate, showCompact, targetDate, theme, lang }: WeatherWidgetProps) {
   const t = (key: string) => TEXTS[key]?.[lang] || key;
@@ -51,111 +53,154 @@ export function WeatherWidget({ destination, startDate, showCompact, targetDate,
 
   useEffect(() => {
     if (!destination) return;
-    if (weatherCache[cacheKey]) return; // Use cache if available
+    if (weatherCache[cacheKey]) {
+      setData(weatherCache[cacheKey].data);
+      setIsHistorical(weatherCache[cacheKey].isHistorical);
+      setLoading(false);
+      return; 
+    }
     
     let isMounted = true;
     setLoading(true);
     setError(null);
 
     async function fetchWeather() {
+      // 1. Check for active promise IMMEDIATELY to prevent overlapping work
+      if (fetchPromises[cacheKey]) {
+        try {
+          const cachedData = await fetchPromises[cacheKey];
+          if (isMounted) {
+            setData(cachedData.data);
+            setIsHistorical(cachedData.isHistorical);
+            setLoading(false);
+          }
+          return;
+        } catch (err) {
+          // If promise failed, we might want to retry below
+        }
+      }
+
       try {
         const safeDest = (!destination || destination.includes('New Trip') || destination === 'Unknown Destination') 
-          ? 'São Miguel, Azores' 
+          ? 'Destination' 
           : destination;
           
         async function performGeocode(query: string) {
-          const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=1`);
-          const d = await res.json();
-          return d.results?.[0] || null;
-        }
-
-        let location = await performGeocode(safeDest);
-        if (!location && safeDest.includes(',')) location = await performGeocode(safeDest.split(',')[0].trim());
-        if (!location && safeDest.toLowerCase().includes('azores')) location = await performGeocode('Ponta Delgada');
-        if (!location) throw new Error(`Location not found`);
-        
-        const { latitude, longitude } = location;
-
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const tripStart = startDate ? new Date(startDate) : today;
-        tripStart.setHours(0, 0, 0, 0);
-        
-        const diffDays = Math.ceil((tripStart.getTime() - today.getTime()) / (1000 * 3600 * 24));
-        
-        let url = '';
-        let historical = false;
-        
-        const toLocalIso = (date: Date) => {
-          const y = date.getFullYear();
-          const m = String(date.getMonth() + 1).padStart(2, '0');
-          const d = String(date.getDate()).padStart(2, '0');
-          return `${y}-${m}-${d}`;
-        };
-
-        if (diffDays >= -30 && diffDays <= 14) {
-           const end = new Date(tripStart);
-           end.setDate(end.getDate() + 10);
-           const maxForecastDate = new Date(today);
-           maxForecastDate.setDate(maxForecastDate.getDate() + 15);
-           const finalEnd = end > maxForecastDate ? maxForecastDate : end;
-
-           url = `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&daily=weathercode,temperature_2m_max,temperature_2m_min,windspeed_10m_max,precipitation_sum&hourly=temperature_2m,precipitation,weather_code&timezone=auto&start_date=${toLocalIso(tripStart)}&end_date=${toLocalIso(finalEnd)}`;
-        } else {
-           historical = true;
-           const lastYearStart = new Date(tripStart);
-           lastYearStart.setFullYear(lastYearStart.getFullYear() - 1);
-           const end = new Date(lastYearStart);
-           end.setDate(end.getDate() + 10);
-           url = `https://archive-api.open-meteo.com/v1/archive?latitude=${latitude}&longitude=${longitude}&daily=weathercode,temperature_2m_max,temperature_2m_min,windspeed_10m_max,precipitation_sum&hourly=temperature_2m,precipitation,weather_code&timezone=auto&start_date=${toLocalIso(lastYearStart)}&end_date=${toLocalIso(end)}`;
-        }
-
-        const weatherRes = await fetch(url);
-        const weatherData = await weatherRes.json();
-        
-        if (!weatherData.daily) throw new Error('Unavailable');
-
-        const days: WeatherDay[] = weatherData.daily.time.map((time: string, index: number) => {
-          let displayDate = new Date(time);
-          if (historical) displayDate.setFullYear(displayDate.getFullYear() + 1);
+          if (geocodeCache[query]) return geocodeCache[query];
           
-          const dayPrefix = time;
-          const hourlyIndices = weatherData.hourly.time
-            .map((t: string, i: number) => t.startsWith(dayPrefix) ? i : -1)
-            .filter((i: number) => i !== -1);
+          // Deduplicate geocoding fetches too
+          const geoKey = `geo-${query}`;
+          if (!fetchPromises[geoKey]) {
+             fetchPromises[geoKey] = fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=1`)
+              .then(async res => {
+                if (res.status === 429) throw new Error('Weather Service Rate Limit (429)');
+                const d = await res.json();
+                return d.results?.[0] || null;
+              });
+          }
+          
+          const result = await fetchPromises[geoKey];
+          if (result) geocodeCache[query] = result;
+          return result;
+        }
 
-          return {
-            date: displayDate.toLocaleDateString(lang === 'cs' ? 'cs-CZ' : 'en-US', { weekday: 'short', month: 'short', day: 'numeric' }),
-            rawTime: time,
-            maxTemp: Math.round(weatherData.daily.temperature_2m_max[index]),
-            minTemp: Math.round(weatherData.daily.temperature_2m_min[index]),
-            windSpeed: Math.round(weatherData.daily.windspeed_10m_max[index]),
-            weatherCode: weatherData.daily.weathercode[index] || 0,
-            precipitation: weatherData.daily.precipitation_sum[index] || 0,
-            hourly: {
-               time: hourlyIndices.map(i => weatherData.hourly.time[i]),
-               temp: hourlyIndices.map(i => Math.round(weatherData.hourly.temperature_2m[i])),
-               precip: hourlyIndices.map(i => (weatherData.hourly.precipitation || weatherData.hourly.precip || [])[i] || 0),
-               weatherCode: hourlyIndices.map(i => (weatherData.hourly.weather_code || weatherData.hourly.weathercode || [])[i] || 0),
-            }
+        const fetchWork = (async () => {
+          let location = await performGeocode(safeDest);
+          if (!location && safeDest.includes(',')) location = await performGeocode(safeDest.split(',')[0].trim());
+          if (!location) location = await performGeocode(safeDest);
+          if (!location) throw new Error(`Location not found`);
+          
+          const { latitude, longitude } = location;
+
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          const tripStart = startDate ? new Date(startDate) : today;
+          tripStart.setHours(0, 0, 0, 0);
+          
+          const diffDays = Math.ceil((tripStart.getTime() - today.getTime()) / (1000 * 3600 * 24));
+          
+          let url = '';
+          let historical = false;
+          
+          const toLocalIso = (date: Date) => {
+            const y = date.getFullYear();
+            const m = String(date.getMonth() + 1).padStart(2, '0');
+            const d = String(date.getDate()).padStart(2, '0');
+            return `${y}-${m}-${d}`;
           };
-        });
 
-        weatherCache[cacheKey] = { data: days, isHistorical: historical };
+          if (diffDays >= -30 && diffDays <= 14) {
+             const end = new Date(tripStart);
+             end.setDate(end.getDate() + 10);
+             const maxForecastDate = new Date(today);
+             maxForecastDate.setDate(maxForecastDate.getDate() + 15);
+             const finalEnd = end > maxForecastDate ? maxForecastDate : end;
+
+             url = `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&daily=weathercode,temperature_2m_max,temperature_2m_min,windspeed_10m_max,precipitation_sum&hourly=temperature_2m,precipitation,weather_code&timezone=auto&start_date=${toLocalIso(tripStart)}&end_date=${toLocalIso(finalEnd)}`;
+          } else {
+             historical = true;
+             const lastYearStart = new Date(tripStart);
+             lastYearStart.setFullYear(lastYearStart.getFullYear() - 1);
+             const end = new Date(lastYearStart);
+             end.setDate(end.getDate() + 10);
+             url = `https://archive-api.open-meteo.com/v1/archive?latitude=${latitude}&longitude=${longitude}&daily=weathercode,temperature_2m_max,temperature_2m_min,windspeed_10m_max,precipitation_sum&hourly=temperature_2m,precipitation,weather_code&timezone=auto&start_date=${toLocalIso(lastYearStart)}&end_date=${toLocalIso(end)}`;
+          }
+
+          const weatherRes = await fetch(url);
+          if (weatherRes.status === 429) throw new Error('Weather Service Rate Limit (429)');
+          const weatherData = await weatherRes.json();
+          
+          if (!weatherData.daily) throw new Error('Weather data unavailable');
+
+          const days: WeatherDay[] = weatherData.daily.time.map((time: string, index: number) => {
+            let displayDate = new Date(time);
+            if (historical) displayDate.setFullYear(displayDate.getFullYear() + 1);
+            
+            const dayPrefix = time;
+            const hourlyIndices = weatherData.hourly.time
+              .map((t: string, i: number) => t.startsWith(dayPrefix) ? i : -1)
+              .filter((i: number) => i !== -1);
+
+            return {
+              date: displayDate.toLocaleDateString(lang === 'cs' ? 'cs-CZ' : 'en-US', { weekday: 'short', month: 'short', day: 'numeric' }),
+              rawTime: time,
+              maxTemp: Math.round(weatherData.daily.temperature_2m_max[index]),
+              minTemp: Math.round(weatherData.daily.temperature_2m_min[index]),
+              windSpeed: Math.round(weatherData.daily.windspeed_10m_max[index]),
+              weatherCode: weatherData.daily.weathercode[index] || 0,
+              precipitation: weatherData.daily.precipitation_sum[index] || 0,
+              hourly: {
+                 time: hourlyIndices.map(i => weatherData.hourly.time[i]),
+                 temp: hourlyIndices.map(i => Math.round(weatherData.hourly.temperature_2m[i])),
+                 precip: hourlyIndices.map(i => (weatherData.hourly.precipitation || weatherData.hourly.precip || [])[index * 24 + (i % 24)] || 0),
+                 weatherCode: hourlyIndices.map(i => (weatherData.hourly.weather_code || weatherData.hourly.weathercode || [])[index * 24 + (i % 24)] || 0),
+              }
+            };
+          });
+
+          return { data: days, isHistorical: historical };
+        })();
+
+        fetchPromises[cacheKey] = fetchWork;
+        const result = await fetchWork;
+        
+        weatherCache[cacheKey] = result;
         if (isMounted) {
-          setData(days);
-          setIsHistorical(historical);
+          setData(result.data);
+          setIsHistorical(result.isHistorical);
+          setLoading(false);
         }
       } catch (err: any) {
         if (isMounted) setError(err.message);
+        console.error('Weather fetch error:', err);
       } finally {
-        if (isMounted) setLoading(false);
+        delete fetchPromises[cacheKey]; // Cleanup
       }
     }
 
     fetchWeather();
     return () => { isMounted = false; };
-  }, [destination, startDate, cacheKey]);
+  }, [destination, startDate, cacheKey, lang]);
 
   const compactDay = useMemo(() => {
     if (!targetDate || data.length === 0) return null;

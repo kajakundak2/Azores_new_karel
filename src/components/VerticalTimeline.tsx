@@ -5,6 +5,9 @@ import { POI, TEXTS } from '../data';
 import { calcDayDuration, formatDuration, toLocalIso } from '../useItineraryState';
 import { ChevronRight, GripVertical, Navigation, MapPin, Plane, Bus, Coffee, Sparkles, Calendar, Car, Bike, Footprints, Hotel, Trash2 } from 'lucide-react';
 import { WeatherWidget } from './WeatherWidget';
+import { translate } from '../utils/bilingualUtils';
+import { createT } from '../utils/i18n';
+import { formatPrice, parseCost } from '../utils/priceUtils';
 
 const getCategoryIcon = (category: string) => {
   switch (category) {
@@ -17,23 +20,148 @@ const getCategoryIcon = (category: string) => {
   }
 };
 
+// ── Directions Cache ──────────────────────────────────────────────────────────
+interface CachedDirection {
+  durationMins: number;
+  distanceKm: string;
+  transitDetails?: {
+    lineName: string;
+    departureTime: string;
+    arrivalTime: string;
+    numStops: number;
+    walkingMins?: number;
+  };
+}
+const directionsCache: Record<string, CachedDirection | 'pending' | 'failed'> = {};
+
+function getCacheKey(prev: POI, next: POI, mode: string): string {
+  if (!prev.location || !next.location) return '';
+  return `${prev.location.lat.toFixed(5)},${prev.location.lng.toFixed(5)}-${next.location.lat.toFixed(5)},${next.location.lng.toFixed(5)}-${mode}`;
+}
+
+function naiveFallback(prev: POI, next: POI, mode: string = 'car'): CachedDirection | null {
+  if (!prev.location || !next.location) return null;
+  const dx = (prev.location.lng - next.location.lng) * Math.cos(prev.location.lat * Math.PI / 180);
+  const dy = prev.location.lat - next.location.lat;
+  const distDeg = Math.sqrt(dx * dx + dy * dy);
+  const km = (distDeg * 111).toFixed(1);
+  const kmNum = Number(km);
+  
+  // Real world estimates based on mountain terrain
+  let mins = Math.round(kmNum * 2.5); // Default (car) - Azorean roads are winding
+  if (mode === 'walk') mins = Math.round(kmNum * 15); // Steep hikes
+  else if (mode === 'bicycle') mins = Math.round(kmNum * 6); // Up and down hills
+  else if (mode === 'bus') mins = Math.round(kmNum * 5 + 10); // Wait time + slower speed
+  
+  return { durationMins: Math.max(2, mins), distanceKm: km };
+}
+
+const modeToGoogleTravelMode: Record<string, string> = {
+  car: 'DRIVE',
+  bus: 'TRANSIT',
+  walk: 'WALK',
+  bicycle: 'BICYCLE',
+};
+
 // ── Transit Node ──────────────────────────────────────────────────────────────
 const TransitNode = ({ prev, next, onModeChange, theme, lang }: { prev: POI; next: POI; onModeChange: (mode: 'car' | 'bus' | 'walk' | 'bicycle') => void; theme: 'dark' | 'light'; lang: string }) => {
-  const t = (key: string) => TEXTS[key]?.[lang] || key;
-
-  const distance = useMemo(() => {
-    if (!prev.location || !next.location) return null;
-    const dx = prev.location.lng - next.location.lng;
-    const dy = prev.location.lat - next.location.lat;
-    const distDeg = Math.sqrt(dx * dx + dy * dy);
-    const km = (distDeg * 111).toFixed(1);
-    const mins = Math.round(Number(km) * 1.5);
-    return { km, mins };
-  }, [prev.location, next.location]);
-
+  const t = createT(lang);
   const currentMode = next.transportModeTo || 'car';
+  const cacheKey = getCacheKey(prev, next, currentMode);
 
-  if (!distance) return <div className="h-8 border-l-2 border-dashed border-slate-200 dark:border-white/10 ml-6 my-1" />;
+  const [routeInfo, setRouteInfo] = React.useState<CachedDirection | null>(null);
+  const [isLoading, setIsLoading] = React.useState(false);
+
+  useEffect(() => {
+    if (!prev.location || !next.location || !cacheKey) return;
+
+    // Check cache
+    const cached = directionsCache[cacheKey];
+    if (cached && cached !== 'pending' && cached !== 'failed') {
+      setRouteInfo(cached);
+      return;
+    }
+    if (cached === 'pending') return;
+    if (cached === 'failed') {
+      setRouteInfo(naiveFallback(prev, next, currentMode));
+      return;
+    }
+
+    // Check if new Route API is available
+    if (typeof google === 'undefined' || !google.maps?.routes?.Route) {
+      setRouteInfo(naiveFallback(prev, next, currentMode));
+      return;
+    }
+
+    directionsCache[cacheKey] = 'pending';
+    setIsLoading(true);
+
+    const googleMode = modeToGoogleTravelMode[currentMode] || 'DRIVE';
+
+    const request: any = {
+      origin: { lat: prev.location.lat, lng: prev.location.lng },
+      destination: { lat: next.location.lat, lng: next.location.lng },
+      travelMode: googleMode,
+      // JS SDK field mask does NOT use routes. prefix
+      fields: ['durationMillis', 'distanceMeters', 'path', 'legs'],
+    };
+    
+    // Transit mode REQUIRES departureTime
+    if (googleMode === 'TRANSIT') {
+      request.departureTime = new Date();
+    }
+
+    google.maps.routes.Route.computeRoutes(request).then((response: any) => {
+      setIsLoading(false);
+      const routes = response.routes;
+      if (routes && routes.length > 0) {
+        const route = routes[0];
+        const leg = route.legs?.[0];
+        
+        // durationMillis is in milliseconds in JS SDK
+        const durationMs = route.durationMillis || 0;
+        const distanceMeters = route.distanceMeters || 0;
+
+        const info: CachedDirection = {
+          durationMins: Math.round(durationMs / 60000),
+          distanceKm: (distanceMeters / 1000).toFixed(1),
+        };
+
+        // Extract transit details for bus/transit mode
+        if (googleMode === 'TRANSIT' && leg?.steps) {
+          const transitStep = leg.steps.find((s: any) => s.travelMode === 'TRANSIT');
+          const td = transitStep?.transitDetails;
+          if (td) {
+            info.transitDetails = {
+              lineName: td.transitLine?.nameShort || td.transitLine?.name || 'Transit',
+              departureTime: td.stopDetails?.departureTime?.text || td.stopDetails?.departureTime || '',
+              arrivalTime: td.stopDetails?.arrivalTime?.text || td.stopDetails?.arrivalTime || '',
+              numStops: td.stopCount || 0,
+            };
+            // Check for walking segments
+            const walkSteps = leg.steps.filter((s: any) => s.travelMode === 'WALKING');
+            const totalWalkMs = walkSteps.reduce((sum: number, s: any) => {
+                return sum + (s.durationMillis || 0);
+            }, 0);
+            if (totalWalkMs > 60000) {
+              info.transitDetails.walkingMins = Math.round(totalWalkMs / 60000);
+            }
+          }
+        }
+
+        directionsCache[cacheKey] = info;
+        setRouteInfo(info);
+      } else {
+        directionsCache[cacheKey] = 'failed';
+        setRouteInfo(naiveFallback(prev, next, currentMode));
+      }
+    }).catch((err: any) => {
+      console.error("Directions error:", err);
+      setIsLoading(false);
+      directionsCache[cacheKey] = 'failed';
+      setRouteInfo(naiveFallback(prev, next, currentMode));
+    });
+  }, [cacheKey, prev.location, next.location, currentMode]);
 
   const modes = [
     { id: 'car', icon: Car, label: t('transport_car') },
@@ -41,6 +169,8 @@ const TransitNode = ({ prev, next, onModeChange, theme, lang }: { prev: POI; nex
     { id: 'walk', icon: Footprints, label: t('transport_walk') },
     { id: 'bicycle', icon: Bike, label: t('transport_bike') },
   ] as const;
+
+  if (!prev.location || !next.location) return <div className="h-8 border-l-2 border-dashed border-slate-200 dark:border-white/10 ml-6 my-1" />;
 
   return (
     <div className="flex items-center gap-4 py-3 ml-4">
@@ -69,20 +199,43 @@ const TransitNode = ({ prev, next, onModeChange, theme, lang }: { prev: POI; nex
             );
           })}
         </div>
-        <div className={`flex items-center gap-2 pl-2 text-[9px] font-bold uppercase tracking-widest transition-colors duration-500 ${theme === 'dark' ? 'text-slate-500' : 'text-slate-600'}`}>
-           <span className="flex items-center gap-1"><Navigation className="w-2.5 h-2.5" /> ~{distance.mins} min</span>
-           <span className="opacity-30">•</span>
-           <span>{distance.km} km</span>
-           {currentMode === 'bus' && (
-             <div className="flex items-center gap-2 ml-2">
-               <span className="text-blue-500 dark:text-blue-400/80 animate-pulse flex items-center gap-1">
-                 <Sparkles className="w-2.5 h-2.5" /> {t('transport_live')}
-               </span>
-               <span className={`px-2 py-0.5 rounded flex items-center gap-1 border ${theme === 'dark' ? 'bg-blue-500/10 border-blue-500/20 text-blue-400' : 'bg-blue-50 border-blue-100 text-blue-600'}`}>
-                 {t('transport_departs')}: 10:15
-               </span>
-             </div>
-           )}
+        <div className={`flex items-center gap-2 pl-2 text-[9px] font-bold uppercase tracking-widest transition-colors duration-500 flex-wrap ${theme === 'dark' ? 'text-slate-500' : 'text-slate-600'}`}>
+          {isLoading ? (
+            <span className="text-emerald-500 animate-pulse flex items-center gap-1">
+              <Navigation className="w-2.5 h-2.5 animate-spin" /> {t('transit_calculating')}
+            </span>
+          ) : routeInfo ? (
+            <>
+              <span className="flex items-center gap-1 whitespace-nowrap"><Navigation className="w-2.5 h-2.5" /> ~{routeInfo.durationMins} min</span>
+              <span className="opacity-30">•</span>
+              <span className="whitespace-nowrap">{routeInfo.distanceKm} km</span>
+              {directionsCache[cacheKey] === 'failed' && (
+                <span className={`px-2 py-0.5 rounded-full text-[7px] font-black uppercase tracking-tighter shrink-0 whitespace-nowrap ${theme === 'dark' ? 'bg-amber-500/10 text-amber-500 border border-amber-500/20' : 'bg-amber-50 text-amber-700 border border-amber-200'}`}>
+                   {t('transit_estimated')}
+                </span>
+              )}
+              {routeInfo.transitDetails && (
+                <div className="flex items-center gap-2 ml-2 flex-wrap">
+                  <span className={`px-2 py-0.5 rounded flex items-center gap-1 border whitespace-nowrap ${theme === 'dark' ? 'bg-blue-500/10 border-blue-500/20 text-blue-400' : 'bg-blue-50 border-blue-100 text-blue-600'}`}>
+                    <Bus className="w-2.5 h-2.5" /> {routeInfo.transitDetails.lineName}
+                  </span>
+                  {routeInfo.transitDetails.departureTime && (
+                    <span className={`px-2 py-0.5 rounded border whitespace-nowrap ${theme === 'dark' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-emerald-50 border-emerald-100 text-emerald-600'}`}>
+                      {routeInfo.transitDetails.departureTime} → {routeInfo.transitDetails.arrivalTime}
+                    </span>
+                  )}
+                  {routeInfo.transitDetails.numStops > 0 && (
+                    <span className="opacity-60 whitespace-nowrap">{routeInfo.transitDetails.numStops} {t('transit_stops')}</span>
+                  )}
+                  {routeInfo.transitDetails.walkingMins && routeInfo.transitDetails.walkingMins > 0 && (
+                    <span className="opacity-60 flex items-center gap-0.5 whitespace-nowrap"><Footprints className="w-2 h-2" /> +{routeInfo.transitDetails.walkingMins}min</span>
+                  )}
+                </div>
+              )}
+            </>
+          ) : (
+            <span className="opacity-40">{t('transit_no_route')}</span>
+          )}
         </div>
       </div>
     </div>
@@ -98,7 +251,7 @@ export const TimelineNode = ({
   currency?: string;
   rates?: any;
 }) => {
-  const t = (key: string) => TEXTS[key]?.[lang] || key;
+  const t = createT(lang);
 
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: poi.id,
@@ -162,11 +315,11 @@ export const TimelineNode = ({
 
           <div className="flex-1 min-w-0 flex flex-col justify-center text-left">
             <h4 className={`font-black truncate text-sm uppercase tracking-tight transition-colors duration-500 ${theme === 'dark' ? 'text-white' : 'text-slate-900'}`}>
-              {poi.title[lang] || poi.title.en}
+              {translate(poi.title, lang)}
             </h4>
-            {(poi.description?.[lang] || poi.description?.en) && (
+            {(poi.description) && (
               <p className={`text-[10px] truncate mt-0.5 ${theme === 'dark' ? 'text-white/40' : 'text-slate-500'}`}>
-                {poi.description[lang] || poi.description.en}
+                {translate(poi.description, lang)}
               </p>
             )}
             <div className="flex items-center gap-3 mt-1">
@@ -181,11 +334,37 @@ export const TimelineNode = ({
                   {poi.rating}
                 </div>
               )}
-              {poi.priceInEuro && (
-                <div className={`px-1.5 py-0.5 rounded-md text-[9px] font-black border ${theme === 'dark' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-emerald-50 border-emerald-100 text-emerald-700'}`}>
-                  {currency || 'EUR'} {Math.round(parseFloat(poi.priceInEuro) * (rates?.[currency || 'EUR'] || 1)).toLocaleString()}
-                </div>
-              )}
+              {(() => {
+                const formatted = formatPrice(poi.cost, poi.priceInEuro, currency || 'EUR', rates || {}, lang);
+                const isFree = poi.cost === 0 || poi.priceInEuro?.toLowerCase() === 'free';
+                
+                if (isFree) {
+                  return (
+                    <div className={`px-1.5 py-0.5 rounded-md text-[9px] font-black border ${theme === 'dark' ? 'bg-green-500/10 border-green-500/20 text-green-400' : 'bg-green-50 border-green-100 text-green-700'}`}>
+                      {t('poi_free')}
+                    </div>
+                  );
+                }
+                
+                if (formatted) {
+                  return (
+                    <div className={`px-1.5 py-0.5 rounded-md text-[9px] font-black border ${theme === 'dark' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-emerald-50 border-emerald-100 text-emerald-700'}`}>
+                      {formatted}
+                    </div>
+                  );
+                }
+                
+                // Show hint for activities/sightseeing if no price yet
+                if (poi.category === 'Sightseeing' || poi.category === 'Activity') {
+                  return (
+                    <div className={`px-1.5 py-0.5 rounded-md text-[9px] font-black border border-dashed ${theme === 'dark' ? 'border-white/10 text-white/20' : 'border-slate-200 text-slate-400'}`}>
+                      {t('poi_entrance_fees_hint')}
+                    </div>
+                  );
+                }
+                
+                return null;
+              })()}
             </div>
           </div>
           <button
@@ -218,7 +397,7 @@ export const TimelineNode = ({
 
 // ── Vertical Timeline Day ─────────────────────────────────────────────────────
 export const VerticalTimelineDay = ({
-  date, lang, items, onRemove, onSelect, onModeChange, destination, tripStartDate, theme, currency, rates
+  date, lang, items, onRemove, onSelect, onModeChange, destination, tripStartDate, theme, currency, rates, travelers = 2
 }: {
   date: Date; 
   lang: string; 
@@ -231,8 +410,9 @@ export const VerticalTimelineDay = ({
   theme?: string;
   currency?: string;
   rates?: any;
+  travelers?: number;
 }) => {
-  const t = (key: string) => TEXTS[key]?.[lang] || key;
+  const t = createT(lang);
   const iso = toLocalIso(date);
   const { isOver, setNodeRef } = useDroppable({ id: iso });
 
@@ -266,15 +446,47 @@ export const VerticalTimelineDay = ({
              theme={theme as any}
              lang={lang}
           />
-          <div className="text-right hidden sm:block">
-            <div className={`text-[9px] font-black uppercase tracking-widest mb-1 transition-colors duration-500 ${theme === 'dark' ? 'text-white/40' : 'text-slate-500'}`}>{t('timeline_total_time')}</div>
-            <div className={`text-sm font-black px-3 py-1 rounded-xl transition-all duration-500 ${
-              theme === 'dark' 
-                ? 'text-emerald-400 bg-emerald-400/10' 
-                : 'text-emerald-700 bg-emerald-50'
-            }`}>
-              {formatDuration(totalMins)}
+          <div className="text-right hidden sm:flex flex-col gap-2">
+            <div>
+              <div className={`text-[9px] font-black uppercase tracking-widest mb-1 transition-colors duration-500 ${theme === 'dark' ? 'text-white/40' : 'text-slate-500'}`}>{t('timeline_total_time')}</div>
+              <div className={`text-sm font-black px-3 py-1 rounded-xl transition-all duration-500 ${
+                theme === 'dark' 
+                  ? 'text-emerald-400 bg-emerald-400/10' 
+                  : 'text-emerald-700 bg-emerald-50'
+              }`}>
+                {formatDuration(totalMins)}
+              </div>
             </div>
+            
+            {(() => {
+              const totalDayCost = items.reduce((sum, item) => {
+                const amount = item.cost ?? (item.priceInEuro ? parseCost(item.priceInEuro) : 0);
+                return sum + (amount || 0);
+              }, 0);
+
+              if (totalDayCost === 0) return null;
+
+              const perPerson = totalDayCost / (travelers || 1);
+              const rate = rates[currency || 'EUR'] || 1;
+              const formattedPrice = new Intl.NumberFormat(lang === 'cs' ? 'cs-CZ' : 'en-US', {
+                style: 'currency',
+                currency: currency || 'EUR',
+                maximumFractionDigits: 0
+              }).format(perPerson * rate);
+
+              return (
+                <div>
+                  <div className={`text-[9px] font-black uppercase tracking-widest mb-1 transition-colors duration-500 ${theme === 'dark' ? 'text-white/40' : 'text-slate-500'}`}>{t('timeline_per_person_est')}</div>
+                  <div className={`text-sm font-black px-3 py-1 rounded-xl transition-all duration-500 ${
+                    theme === 'dark' 
+                      ? 'text-blue-400 bg-blue-400/10' 
+                      : 'text-blue-700 bg-blue-50'
+                  }`}>
+                    {formattedPrice}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         </div>
       </div>
