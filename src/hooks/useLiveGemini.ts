@@ -259,6 +259,17 @@ export function useLiveGemini({
       setIsActive(true);
       onStatusChange?.('connecting');
 
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          sampleRate: 16000,
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
+      });
+      streamRef.current = stream;
+
       // 1. Initialize Audio Context (16kHz for input)
       const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
       if (audioContext.state === 'suspended') {
@@ -303,17 +314,6 @@ export function useLiveGemini({
       };
       
       analyzeVolume();
-
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          sampleRate: 16000,
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true
-        }
-      });
-      streamRef.current = stream;
 
       const source = audioContext.createMediaStreamSource(stream);
       

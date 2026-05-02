@@ -1,0 +1,484 @@
+﻿{
+    "routes":  [
+                   {
+                       "legs":  [
+                                    {
+                                        "distanceMeters":  15050,
+                                        "duration":  "1597s",
+                                        "staticDuration":  "1597s",
+                                        "polyline":  {
+                                                         "encodedPolyline":  "c|peFf`ejVZd@{AcAHIsBuCqDuEaD}EySeYmD}EgC}CqCwD}FsIeAwADEl@~@i@K@CaMuPkMeQsRuWgFgHiAcBgAgBcAoBsBiF}E}Mwc@crA}AyFqAaGc@aC}@iG[eCaB{OyIm~@qReqBk@oGs@yK]qGi@gPS}KEsGH_LLsG^}K~B}i@lBka@TqGj@{Kn@{KRgCp@mGhEe\\|AmKd@aCzA{FvCoJbBwFrCqJn@{Bf@aC`AgGtCyS^cCd@aCj@}Br@yBdDeJpBmFxBeFv@wBb@aCLiCFiCKgCm@{BgAiBwAqAcBw@eBs@eEwBaB_A_BcAaB_AwAs@AHwCuD]|@"
+                                                     },
+                                        "startLocation":  {
+                                                              "latLng":  {
+                                                                             "latitude":  37.774899999999995,
+                                                                             "longitude":  -122.41939999999998
+                                                                         }
+                                                          },
+                                        "endLocation":  {
+                                                            "latLng":  {
+                                                                           "latitude":  37.8044,
+                                                                           "longitude":  -122.2711
+                                                                       }
+                                                        },
+                                        "steps":  [
+                                                      {
+                                                          "distanceMeters":  22,
+                                                          "staticDuration":  "18s",
+                                                          "polyline":  {
+                                                                           "encodedPolyline":  "c|peFf`ejVZd@"
+                                                                       },
+                                                          "startLocation":  {
+                                                                                "latLng":  {
+                                                                                               "latitude":  37.774899999999995,
+                                                                                               "longitude":  -122.41939999999998
+                                                                                           }
+                                                                            },
+                                                          "endLocation":  {
+                                                                              "latLng":  {
+                                                                                             "latitude":  37.7747633,
+                                                                                             "longitude":  -122.41958740000001
+                                                                                         }
+                                                                          },
+                                                          "navigationInstruction":  {
+
+                                                                                    },
+                                                          "localizedValues":  {
+                                                                                  "distance":  {
+                                                                                                   "text":  "72 ft"
+                                                                                               },
+                                                                                  "staticDuration":  {
+                                                                                                         "text":  "1 min"
+                                                                                                     }
+                                                                              },
+                                                          "travelMode":  "WALK"
+                                                      },
+                                                      {
+                                                          "distanceMeters":  58,
+                                                          "staticDuration":  "59s",
+                                                          "polyline":  {
+                                                                           "encodedPolyline":  "g{peFlaejV{AcA"
+                                                                       },
+                                                          "startLocation":  {
+                                                                                "latLng":  {
+                                                                                               "latitude":  37.7747633,
+                                                                                               "longitude":  -122.41958740000001
+                                                                                           }
+                                                                            },
+                                                          "endLocation":  {
+                                                                              "latLng":  {
+                                                                                             "latitude":  37.7752153,
+                                                                                             "longitude":  -122.4192526
+                                                                                         }
+                                                                          },
+                                                          "navigationInstruction":  {
+                                                                                        "instructions":  "Take entrance "
+                                                                                    },
+                                                          "localizedValues":  {
+                                                                                  "distance":  {
+                                                                                                   "text":  "190 ft"
+                                                                                               },
+                                                                                  "staticDuration":  {
+                                                                                                         "text":  "1 min"
+                                                                                                     }
+                                                                              },
+                                                          "travelMode":  "WALK"
+                                                      },
+                                                      {
+                                                          "distanceMeters":  1508,
+                                                          "staticDuration":  "155s",
+                                                          "polyline":  {
+                                                                           "encodedPolyline":  "c~peFh_ejVHIsBuCqDuEaD}EySeYmD}EgC}CqCwD}FsIeAwADE"
+                                                                       },
+                                                          "startLocation":  {
+                                                                                "latLng":  {
+                                                                                               "latitude":  37.7752153,
+                                                                                               "longitude":  -122.4192526
+                                                                                           }
+                                                                            },
+                                                          "endLocation":  {
+                                                                              "latLng":  {
+                                                                                             "latitude":  37.78465,
+                                                                                             "longitude":  -122.40708999999998
+                                                                                         }
+                                                                          },
+                                                          "navigationInstruction":  {
+                                                                                        "instructions":  "Light rail towards Embarcadero Station"
+                                                                                    },
+                                                          "localizedValues":  {
+                                                                                  "distance":  {
+                                                                                                   "text":  "0.9 mi"
+                                                                                               },
+                                                                                  "staticDuration":  {
+                                                                                                         "text":  "3 mins"
+                                                                                                     }
+                                                                              },
+                                                          "transitDetails":  {
+                                                                                 "stopDetails":  {
+                                                                                                     "arrivalStop":  {
+                                                                                                                         "name":  "Powell Station",
+                                                                                                                         "location":  {
+                                                                                                                                          "latLng":  "@{latitude=37.78465; longitude=-122.40708999999998}"
+                                                                                                                                      }
+                                                                                                                     },
+                                                                                                     "arrivalTime":  "2026-05-02T20:10:23Z",
+                                                                                                     "departureStop":  {
+                                                                                                                           "name":  "Van Ness",
+                                                                                                                           "location":  {
+                                                                                                                                            "latLng":  "@{latitude=37.7752153; longitude=-122.4192526}"
+                                                                                                                                        }
+                                                                                                                       },
+                                                                                                     "departureTime":  "2026-05-02T20:07:10Z"
+                                                                                                 },
+                                                                                 "localizedValues":  {
+                                                                                                         "arrivalTime":  {
+                                                                                                                             "time":  {
+                                                                                                                                          "text":  "1:10 PM"
+                                                                                                                                      },
+                                                                                                                             "timeZone":  "America/Los_Angeles"
+                                                                                                                         },
+                                                                                                         "departureTime":  {
+                                                                                                                               "time":  {
+                                                                                                                                            "text":  "1:07 PM"
+                                                                                                                                        },
+                                                                                                                               "timeZone":  "America/Los_Angeles"
+                                                                                                                           }
+                                                                                                     },
+                                                                                 "headsign":  "Embarcadero Station",
+                                                                                 "transitLine":  {
+                                                                                                     "agencies":  [
+                                                                                                                      {
+                                                                                                                          "name":  "San Francisco Municipal Transportation Agency",
+                                                                                                                          "uri":  "http://www.sfmta.com/"
+                                                                                                                      }
+                                                                                                                  ],
+                                                                                                     "name":  "Ocean View",
+                                                                                                     "uri":  "http://www.sfmta.com/M",
+                                                                                                     "color":  "#c4074e",
+                                                                                                     "iconUri":  "//maps.gstatic.com/mapfiles/transit/iw2/6/us-sanfrancisco-muni-M.png",
+                                                                                                     "nameShort":  "M",
+                                                                                                     "textColor":  "#ffffff",
+                                                                                                     "vehicle":  {
+                                                                                                                     "name":  {
+                                                                                                                                  "text":  "Light rail"
+                                                                                                                              },
+                                                                                                                     "type":  "TRAM",
+                                                                                                                     "iconUri":  "//maps.gstatic.com/mapfiles/transit/iw2/6/tram2.png"
+                                                                                                                 }
+                                                                                                 },
+                                                                                 "stopCount":  3
+                                                                             },
+                                                          "travelMode":  "TRANSIT"
+                                                      },
+                                                      {
+                                                          "distanceMeters":  37,
+                                                          "staticDuration":  "38s",
+                                                          "polyline":  {
+                                                                           "encodedPolyline":  "ayreFhsbjVl@~@"
+                                                                       },
+                                                          "startLocation":  {
+                                                                                "latLng":  {
+                                                                                               "latitude":  37.78465,
+                                                                                               "longitude":  -122.40708999999998
+                                                                                           }
+                                                                            },
+                                                          "endLocation":  {
+                                                                              "latLng":  {
+                                                                                             "latitude":  37.7844238,
+                                                                                             "longitude":  -122.40741240000001
+                                                                                         }
+                                                                          },
+                                                          "navigationInstruction":  {
+                                                                                        "instructions":  "Take exit Bart/Muni, Powell Street Station, 5th \u0026 Market - SE Corner"
+                                                                                    },
+                                                          "localizedValues":  {
+                                                                                  "distance":  {
+                                                                                                   "text":  "121 ft"
+                                                                                               },
+                                                                                  "staticDuration":  {
+                                                                                                         "text":  "1 min"
+                                                                                                     }
+                                                                              },
+                                                          "travelMode":  "WALK"
+                                                      },
+                                                      {
+                                                          "distanceMeters":  23,
+                                                          "staticDuration":  "77s",
+                                                          "polyline":  {
+                                                                           "encodedPolyline":  "swreFhubjVi@K"
+                                                                       },
+                                                          "startLocation":  {
+                                                                                "latLng":  {
+                                                                                               "latitude":  37.7844238,
+                                                                                               "longitude":  -122.40741240000001
+                                                                                           }
+                                                                            },
+                                                          "endLocation":  {
+                                                                              "latLng":  {
+                                                                                             "latitude":  37.7846267,
+                                                                                             "longitude":  -122.4073463
+                                                                                         }
+                                                                          },
+                                                          "navigationInstruction":  {
+                                                                                        "instructions":  "Take entrance Bart/Muni, Powell Street Station, 5th \u0026 Market - SE Corner"
+                                                                                    },
+                                                          "localizedValues":  {
+                                                                                  "distance":  {
+                                                                                                   "text":  "75 ft"
+                                                                                               },
+                                                                                  "staticDuration":  {
+                                                                                                         "text":  "1 min"
+                                                                                                     }
+                                                                              },
+                                                          "travelMode":  "WALK"
+                                                      },
+                                                      {
+                                                          "distanceMeters":  13255,
+                                                          "staticDuration":  "780s",
+                                                          "polyline":  {
+                                                                           "encodedPolyline":  "}xreF|tbjV@CaMuPkMeQsRuWgFgHiAcBgAgBcAoBsBiF}E}Mwc@crA}AyFqAaGc@aC}@iG[eCaB{OyIm~@qReqBk@oGs@yK]qGi@gPS}KEsGH_LLsG^}K~B}i@lBka@TqGj@{Kn@{KRgCp@mGhEe\\|AmKd@aCzA{FvCoJbBwFrCqJn@{Bf@aC`AgGtCyS^cCd@aCj@}Br@yBdDeJpBmFxBeFv@wBb@aCLiCFiCKgCm@{BgAiBwAqAcBw@eBs@eEwBaB_A_BcAaB_AwAs@AH"
+                                                                       },
+                                                          "startLocation":  {
+                                                                                "latLng":  {
+                                                                                               "latitude":  37.7846267,
+                                                                                               "longitude":  -122.4073463
+                                                                                           }
+                                                                            },
+                                                          "endLocation":  {
+                                                                              "latLng":  {
+                                                                                             "latitude":  37.803491199999996,
+                                                                                             "longitude":  -122.27169610000001
+                                                                                         }
+                                                                          },
+                                                          "navigationInstruction":  {
+                                                                                        "instructions":  "Subway towards Richmond"
+                                                                                    },
+                                                          "localizedValues":  {
+                                                                                  "distance":  {
+                                                                                                   "text":  "8.2 mi"
+                                                                                               },
+                                                                                  "staticDuration":  {
+                                                                                                         "text":  "13 mins"
+                                                                                                     }
+                                                                              },
+                                                          "transitDetails":  {
+                                                                                 "stopDetails":  {
+                                                                                                     "arrivalStop":  {
+                                                                                                                         "name":  "12th St / Oakland",
+                                                                                                                         "location":  {
+                                                                                                                                          "latLng":  "@{latitude=37.803491199999996; longitude=-122.27169610000001}"
+                                                                                                                                      }
+                                                                                                                     },
+                                                                                                     "arrivalTime":  "2026-05-02T20:29:25Z",
+                                                                                                     "departureStop":  {
+                                                                                                                           "name":  "Powell St",
+                                                                                                                           "location":  {
+                                                                                                                                            "latLng":  "@{latitude=37.7846267; longitude=-122.4073463}"
+                                                                                                                                        }
+                                                                                                                       },
+                                                                                                     "departureTime":  "2026-05-02T20:15:35Z"
+                                                                                                 },
+                                                                                 "localizedValues":  {
+                                                                                                         "arrivalTime":  {
+                                                                                                                             "time":  {
+                                                                                                                                          "text":  "1:29 PM"
+                                                                                                                                      },
+                                                                                                                             "timeZone":  "America/Los_Angeles"
+                                                                                                                         },
+                                                                                                         "departureTime":  {
+                                                                                                                               "time":  {
+                                                                                                                                            "text":  "1:15 PM"
+                                                                                                                                        },
+                                                                                                                               "timeZone":  "America/Los_Angeles"
+                                                                                                                           }
+                                                                                                     },
+                                                                                 "headsign":  "Richmond",
+                                                                                 "transitLine":  {
+                                                                                                     "agencies":  [
+                                                                                                                      {
+                                                                                                                          "name":  "Bay Area Rapid Transit",
+                                                                                                                          "phoneNumber":  "+1 510-464-6000",
+                                                                                                                          "uri":  "https://www.bart.gov/"
+                                                                                                                      }
+                                                                                                                  ],
+                                                                                                     "name":  "Millbrae/SF Int\u0027l Airport SFO to Richmond",
+                                                                                                     "uri":  "https://www.bart.gov/schedules/bylineresults?route=8",
+                                                                                                     "color":  "#f20000",
+                                                                                                     "nameShort":  "Red-N",
+                                                                                                     "textColor":  "#ffffff",
+                                                                                                     "vehicle":  {
+                                                                                                                     "name":  {
+                                                                                                                                  "text":  "Subway"
+                                                                                                                              },
+                                                                                                                     "type":  "SUBWAY",
+                                                                                                                     "iconUri":  "//maps.gstatic.com/mapfiles/transit/iw2/6/subway2.png",
+                                                                                                                     "localIconUri":  "//maps.gstatic.com/mapfiles/transit/iw2/6/us-sf-bart.png"
+                                                                                                                 }
+                                                                                                 },
+                                                                                 "stopCount":  5
+                                                                             },
+                                                          "travelMode":  "TRANSIT"
+                                                      },
+                                                      {
+                                                          "distanceMeters":  116,
+                                                          "staticDuration":  "113s",
+                                                          "polyline":  {
+                                                                           "encodedPolyline":  "ynveFbehiVwCuD"
+                                                                       },
+                                                          "startLocation":  {
+                                                                                "latLng":  {
+                                                                                               "latitude":  37.803491199999996,
+                                                                                               "longitude":  -122.27169610000001
+                                                                                           }
+                                                                            },
+                                                          "endLocation":  {
+                                                                              "latLng":  {
+                                                                                             "latitude":  37.804249999999996,
+                                                                                             "longitude":  -122.27078999999999
+                                                                                         }
+                                                                          },
+                                                          "navigationInstruction":  {
+                                                                                        "instructions":  "Take exit B4"
+                                                                                    },
+                                                          "localizedValues":  {
+                                                                                  "distance":  {
+                                                                                                   "text":  "381 ft"
+                                                                                               },
+                                                                                  "staticDuration":  {
+                                                                                                         "text":  "2 mins"
+                                                                                                     }
+                                                                              },
+                                                          "travelMode":  "WALK"
+                                                      },
+                                                      {
+                                                          "distanceMeters":  31,
+                                                          "staticDuration":  "27s",
+                                                          "polyline":  {
+                                                                           "encodedPolyline":  "qsveFl_hiV]|@"
+                                                                       },
+                                                          "startLocation":  {
+                                                                                "latLng":  {
+                                                                                               "latitude":  37.804249999999996,
+                                                                                               "longitude":  -122.27078999999999
+                                                                                           }
+                                                                            },
+                                                          "endLocation":  {
+                                                                              "latLng":  {
+                                                                                             "latitude":  37.8044,
+                                                                                             "longitude":  -122.2711
+                                                                                         }
+                                                                          },
+                                                          "navigationInstruction":  {
+
+                                                                                    },
+                                                          "localizedValues":  {
+                                                                                  "distance":  {
+                                                                                                   "text":  "102 ft"
+                                                                                               },
+                                                                                  "staticDuration":  {
+                                                                                                         "text":  "1 min"
+                                                                                                     }
+                                                                              },
+                                                          "travelMode":  "WALK"
+                                                      }
+                                                  ],
+                                        "localizedValues":  {
+                                                                "distance":  {
+                                                                                 "text":  "9.4 mi"
+                                                                             },
+                                                                "duration":  {
+                                                                                 "text":  "27 mins"
+                                                                             },
+                                                                "staticDuration":  {
+                                                                                       "text":  "27 mins"
+                                                                                   }
+                                                            },
+                                        "stepsOverview":  {
+                                                              "multiModalSegments":  [
+                                                                                         {
+                                                                                             "stepStartIndex":  0,
+                                                                                             "stepEndIndex":  1,
+                                                                                             "navigationInstruction":  {
+                                                                                                                           "instructions":  "Walk to Van Ness"
+                                                                                                                       },
+                                                                                             "travelMode":  "WALK"
+                                                                                         },
+                                                                                         {
+                                                                                             "stepStartIndex":  2,
+                                                                                             "stepEndIndex":  2,
+                                                                                             "navigationInstruction":  {
+                                                                                                                           "instructions":  "Light rail towards Embarcadero Station"
+                                                                                                                       },
+                                                                                             "travelMode":  "TRANSIT"
+                                                                                         },
+                                                                                         {
+                                                                                             "stepStartIndex":  3,
+                                                                                             "stepEndIndex":  4,
+                                                                                             "navigationInstruction":  {
+                                                                                                                           "instructions":  "Walk to Powell St"
+                                                                                                                       },
+                                                                                             "travelMode":  "WALK"
+                                                                                         },
+                                                                                         {
+                                                                                             "stepStartIndex":  5,
+                                                                                             "stepEndIndex":  5,
+                                                                                             "navigationInstruction":  {
+                                                                                                                           "instructions":  "Subway towards Richmond"
+                                                                                                                       },
+                                                                                             "travelMode":  "TRANSIT"
+                                                                                         },
+                                                                                         {
+                                                                                             "stepStartIndex":  6,
+                                                                                             "stepEndIndex":  7,
+                                                                                             "travelMode":  "WALK"
+                                                                                         }
+                                                                                     ]
+                                                          }
+                                    }
+                                ],
+                       "distanceMeters":  15050,
+                       "duration":  "1552s",
+                       "staticDuration":  "1552s",
+                       "polyline":  {
+                                        "encodedPolyline":  "c|peFf`ejVZd@{AcAHIsBuCqDuEaD}EySeYmD}EgC}CqCwD}FsIeAwADEl@~@i@K@CaMuPkMeQsRuWgFgHiAcBgAgBcAoBsBiF}E}Mwc@crA}AyFqAaGc@aC}@iG[eCaB{OyIm~@qReqBk@oGs@yK]qGi@gPS}KEsGH_LLsG^}K~B}i@lBka@TqGj@{Kn@{KRgCp@mGhEe\\|AmKd@aCzA{FvCoJbBwFrCqJn@{Bf@aC`AgGtCyS^cCd@aCj@}Br@yBdDeJpBmFxBeFv@wBb@aCLiCFiCKgCm@{BgAiBwAqAcBw@eBs@eEwBaB_A_BcAaB_AwAs@AHwCuD]|@"
+                                    },
+                       "viewport":  {
+                                        "low":  {
+                                                    "latitude":  37.7747633,
+                                                    "longitude":  -122.41958740000001
+                                                },
+                                        "high":  {
+                                                     "latitude":  37.809939899999996,
+                                                     "longitude":  -122.27078999999999
+                                                 }
+                                    },
+                       "travelAdvisory":  {
+                                              "transitFare":  {
+                                                                  "currencyCode":  "USD",
+                                                                  "units":  "7",
+                                                                  "nanos":  500000000
+                                                              }
+                                          },
+                       "localizedValues":  {
+                                               "distance":  {
+                                                                "text":  "9.4 mi"
+                                                            },
+                                               "duration":  {
+                                                                "text":  "26 mins"
+                                                            },
+                                               "staticDuration":  {
+                                                                      "text":  "26 mins"
+                                                                  },
+                                               "transitFare":  {
+                                                                   "text":  "$7.50"
+                                                               }
+                                           },
+                       "routeLabels":  [
+                                           "DEFAULT_ROUTE"
+                                       ]
+                   }
+               ],
+    "geocodingResults":  {
+
+                         }
+}

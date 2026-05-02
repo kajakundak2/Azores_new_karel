@@ -1,0 +1,66 @@
+﻿Usage: graphify <command>
+
+Commands:
+  install [--platform P]  copy skill to platform config dir (claude|windows|codex|opencode|aider|claw|droid|trae|trae-cn|gemini|cursor|antigravity|hermes|kiro)
+  path "A" "B"            shortest path between two nodes in graph.json
+    --graph <path>          path to graph.json (default graphify-out/graph.json)
+  explain "X"             plain-language explanation of a node and its neighbors
+    --graph <path>          path to graph.json (default graphify-out/graph.json)
+  clone <github-url>      clone a GitHub repo locally and print its path for /graphify
+  merge-graphs <g1> <g2>  merge two or more graph.json files into one cross-repo graph
+    --out <path>            output path (default: graphify-out/merged-graph.json)
+    --branch <branch>       checkout a specific branch (default: repo default)
+    --out <dir>             clone to a custom directory (default: ~/.graphify/repos/<owner>/<repo>)
+  add <url>               fetch a URL and save it to ./raw, then update the graph
+    --author "Name"         tag the author of the content
+    --contributor "Name"    tag who added it to the corpus
+    --dir <path>            target directory (default: ./raw)
+  watch <path>            watch a folder and rebuild the graph on code changes
+  update <path>           re-extract code files and update the graph (no LLM needed)
+  cluster-only <path>     rerun clustering on an existing graph.json and regenerate report
+  query "<question>"       BFS traversal of graph.json for a question
+    --dfs                   use depth-first instead of breadth-first
+    --budget N              cap output at N tokens (default 2000)
+    --graph <path>          path to graph.json (default graphify-out/graph.json)
+  save-result             save a Q&A result to graphify-out/memory/ for graph feedback loop
+    --question Q            the question asked
+    --answer A              the answer to save
+    --type T                query type: query|path_query|explain (default: query)
+    --nodes N1 N2 ...       source node labels cited in the answer
+    --memory-dir DIR        memory directory (default: graphify-out/memory)
+  check-update <path>     check needs_update flag and notify if semantic re-extraction is pending (cron-safe)
+  benchmark [graph.json]  measure token reduction vs naive full-corpus approach
+  hook install            install post-commit/post-checkout git hooks (all platforms)
+  hook uninstall          remove git hooks
+  hook status             check if git hooks are installed
+  gemini install          write GEMINI.md section + BeforeTool hook (Gemini CLI)
+  gemini uninstall        remove GEMINI.md section + BeforeTool hook
+  cursor install          write .cursor/rules/graphify.mdc (Cursor)
+  cursor uninstall        remove .cursor/rules/graphify.mdc
+  claude install          write graphify section to CLAUDE.md + PreToolUse hook (Claude Code)
+  claude uninstall        remove graphify section from CLAUDE.md + PreToolUse hook
+  codex install           write graphify section to AGENTS.md (Codex)
+  codex uninstall         remove graphify section from AGENTS.md
+  opencode install        write graphify section to AGENTS.md + tool.execute.before plugin (OpenCode)
+  opencode uninstall      remove graphify section from AGENTS.md + plugin
+  aider install           write graphify section to AGENTS.md (Aider)
+  aider uninstall         remove graphify section from AGENTS.md
+  copilot install         copy graphify skill to ~/.copilot/skills (GitHub Copilot CLI)
+  copilot uninstall       remove graphify skill from ~/.copilot/skills
+  vscode install          configure VS Code Copilot Chat (skill + .github/copilot-instructions.md)
+  vscode uninstall        remove VS Code Copilot Chat configuration
+  claw install            write graphify section to AGENTS.md (OpenClaw)
+  claw uninstall          remove graphify section from AGENTS.md
+  droid install           write graphify section to AGENTS.md (Factory Droid)
+  droid uninstall        remove graphify section from AGENTS.md
+  trae install            write graphify section to AGENTS.md (Trae)
+  trae uninstall         remove graphify section from AGENTS.md
+  trae-cn install         write graphify section to AGENTS.md (Trae CN)
+  trae-cn uninstall      remove graphify section from AGENTS.md
+  antigravity install     write .agents/rules + .agents/workflows + skill (Google Antigravity)
+  antigravity uninstall   remove .agents/rules, .agents/workflows, and skill
+  hermes install          write skill to ~/.hermes/skills/graphify/ (Hermes)
+  hermes uninstall        remove skill from ~/.hermes/skills/graphify/
+  kiro install            write skill to .kiro/skills/graphify/ + steering file (Kiro IDE/CLI)
+  kiro uninstall          remove skill + steering file
+
