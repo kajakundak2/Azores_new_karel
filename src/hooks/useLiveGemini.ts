@@ -2,14 +2,16 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { AudioProcessor } from '../utils/audioUtils';
 import { searchPlacesAsync } from './usePlacesSearch';
 import { geminiKeyManager } from '../utils/geminiKeyManager';
+import { getToolDeclarations } from '../utils/saraTools';
 
 interface UseLiveGeminiProps {
-  onUpdateItinerary?: (data: { day: number; activity: string; description?: string; category?: string; type?: string; intensity?: string }) => Promise<void> | void;
-  onUpdateTripDetails?: (data: { destination?: string; startDate?: string; endDate?: string; adults?: number; kids?: number; preferences?: string }) => Promise<void> | void;
+  onUpdateItinerary?: (data: any) => Promise<void> | void;
+  onUpdateTripDetails?: (data: any) => Promise<void> | void;
   onRemoveFromItinerary?: (data: { day: number; activity: string }) => Promise<void> | void;
   onClearDay?: (data: { day: number }) => Promise<void> | void;
   onClearItinerary?: () => Promise<void> | void;
   onTriggerSmartItinerary?: (intensity: string, dayNumbers?: number[]) => Promise<void> | void;
+  onToolCall?: (name: string, args: any) => Promise<any>;
   onUploadDoc?: (file: File) => void;
   onRemoteVolumeChange?: (volume: number) => void;
   onVolumeChange?: (volume: number) => void;
@@ -19,6 +21,7 @@ interface UseLiveGeminiProps {
   onUserMessage?: (text: string, isFinal?: boolean) => void;
   systemInstruction?: string;
   lang?: string;
+  destination?: string;
 }
 
 /**
@@ -32,6 +35,7 @@ export function useLiveGemini({
   onClearDay,
   onClearItinerary,
   onTriggerSmartItinerary,
+  onToolCall,
   onUploadDoc,
   onRemoteVolumeChange,
   onVolumeChange, 
@@ -40,7 +44,8 @@ export function useLiveGemini({
   onMessage, 
   onUserMessage, 
   systemInstruction,
-  lang = 'en'
+  lang = 'en',
+  destination = ''
 }: UseLiveGeminiProps) {
   const [isActive, setIsActive] = useState(false);
   const isActiveRef = useRef(false);
@@ -55,6 +60,7 @@ export function useLiveGemini({
     onClearDay,
     onClearItinerary,
     onTriggerSmartItinerary,
+    onToolCall,
     onUploadDoc,
     onShowUICard,
     onStatusChange,
@@ -72,6 +78,7 @@ export function useLiveGemini({
       onClearDay,
       onClearItinerary,
       onTriggerSmartItinerary,
+      onToolCall,
       onUploadDoc,
       onShowUICard,
       onStatusChange,
@@ -341,150 +348,7 @@ export function useLiveGemini({
               }]
             },
             tools: [{
-              functionDeclarations: [
-                {
-                  name: "trigger_smart_itinerary_generation",
-                  description: "Triggers the system to automatically generate a highly detailed, smart, day-by-day itinerary with connected activities, food stops, and optimal routing. Use this when the user asks you to plan everything, pack the days, or create the whole trip plan.",
-                  parameters: {
-                    type: "OBJECT",
-                    properties: {
-                      intensity: { type: "STRING", enum: ["relaxed", "balanced", "packed"], description: "The pace of the trip." },
-                      dayNumbers: { type: "ARRAY", items: { type: "NUMBER" }, description: "Specific day numbers to regenerate (1-based), e.g. [3]. Leave empty for full trip." }
-                    }
-                  }
-                },
-                {
-                  name: "update_itinerary",
-                  description: "Modifies the trip schedule when the user wants to add, change, or remove an activity for a specific day.",
-                  parameters: {
-                    type: "OBJECT",
-                    properties: {
-                      day: { type: "NUMBER", description: "Day number (1-10)" },
-                      activity: { type: "STRING", description: "Short title of the activity" },
-                      description: { type: "STRING", description: "A one-sentence engaging description." },
-                      category: { type: "STRING", enum: ["Sightseeing", "Activity", "Food", "Transport", "Special", "City"], description: "The type of activity." },
-                      address: { type: "STRING", description: "Street address or area name of the location." },
-                      location: {
-                        type: "OBJECT",
-                        description: "Approximate GPS coordinates of the activity.",
-                        properties: {
-                          lat: { type: "NUMBER", description: "Latitude" },
-                          lng: { type: "NUMBER", description: "Longitude" }
-                        }
-                      }
-                    },
-                    required: ["day", "activity"]
-                  }
-                },
-                {
-                  name: "update_trip_details",
-                  description: "Updates high-level trip parameters such as destination, dates, and number of travelers based on the conversation.",
-                  parameters: {
-                    type: "OBJECT",
-                    properties: {
-                      destination: { type: "STRING", description: "The trip destination (e.g., 'Paris, France')" },
-                      startDate: { type: "STRING", description: "Start date in YYYY-MM-DD format" },
-                      endDate: { type: "STRING", description: "End date in YYYY-MM-DD format" },
-                      adults: { type: "NUMBER", description: "Number of adult travelers" },
-                      kids: { type: "NUMBER", description: "Number of children" },
-                      preferences: { type: "STRING", description: "General travel preferences or requests." },
-                      planningMode: { type: "STRING", enum: ["relaxed", "balanced", "packed"], description: "The pace of the trip." }
-                    }
-                  }
-                },
-                {
-                  name: "clear_day",
-                  description: "Clear all activities from a specific day in the itinerary.",
-                  parameters: {
-                    type: "OBJECT",
-                    properties: {
-                      day: { type: "NUMBER", description: "The day number to clear (e.g., 1 for Day 1)" }
-                    },
-                    required: ["day"]
-                  }
-                },
-                {
-                  name: "clear_itinerary",
-                  description: "Clear all non-fixed activities from the entire itinerary.",
-                  parameters: {
-                    type: "OBJECT",
-                    properties: {}
-                  }
-                },
-                {
-                  name: "generate_itinerary",
-                  description: "Finalizes the planning phase and creates the actual trip itinerary. Use this when the user is satisfied and wants to see the plan.",
-                  parameters: {
-                    type: "OBJECT",
-                    properties: {
-                      planningMode: { type: "STRING", enum: ["relaxed", "balanced", "packed"], description: "The user's preferred intensity for the generated itinerary." }
-                    }
-                  }
-                },
-                {
-                  name: "remove_from_itinerary",
-                  description: "Removes an activity/POI from the itinerary. Requires exact day number and exact activity title.",
-                  parameters: {
-                    type: "OBJECT",
-                    properties: {
-                      day: { type: "NUMBER", description: "Day number to remove from (1-10)" },
-                      activity: { type: "STRING", description: "Title or name of activity to remove" }
-                    },
-                    required: ["day", "activity"]
-                  }
-                },
-                {
-                  name: 'search_google_places',
-                  description: 'Search for a real point of interest (restaurant, trail, location, city, event etc.). Returns real places with photos and ratings.',
-                  parameters: {
-                    type: 'OBJECT',
-                    properties: { query: { type: 'STRING' } },
-                    required: ['query']
-                  }
-                },
-                {
-                  name: 'search_flights',
-                  description: 'Search for flight options to the destination.',
-                  parameters: {
-                    type: 'OBJECT',
-                    properties: { origin: { type: 'STRING' }, date: { type: "STRING" } },
-                    required: ['origin', 'date']
-                  }
-                },
-                {
-                  name: "set_traveler_profiles",
-                  description: "Record individual traveler details including name, gender, and age.",
-                  parameters: {
-                    type: "OBJECT",
-                    properties: {
-                      travelers: {
-                        type: "ARRAY",
-                        items: {
-                          type: "OBJECT",
-                          properties: {
-                            name: { type: "STRING" },
-                            gender: { type: "STRING", enum: ["male", "female", "child"] },
-                            age: { type: "NUMBER" }
-                          },
-                          required: ["name", "gender"]
-                        }
-                      }
-                    },
-                    required: ["travelers"]
-                  }
-                },
-                {
-                  name: "set_packing_requirements",
-                  description: "Update specific requirements for the packing list (e.g. 'hiking gear', 'formal wear').",
-                  parameters: {
-                    type: "OBJECT",
-                    properties: {
-                      requirements: { type: "STRING" }
-                    },
-                    required: ["requirements"]
-                  }
-                }
-              ]
+              functionDeclarations: getToolDeclarations(destination)
             }]
           }
         };
@@ -610,17 +474,45 @@ export function useLiveGemini({
                 }
               };
 
-              if (name === 'update_itinerary' && args) {
-                const processCall = async () => {
+              // If onToolCall is available, route everything through it (unified tool handling)
+              if (callbacksRef.current.onToolCall) {
+                const processGeneric = async () => {
                   try {
-                    await callbacksRef.current.onUpdateItinerary?.(args as any);
-                    sendResponse({ success: true, message: `Updated Day ${args.day} with: ${args.activity}` });
+                    const result = await callbacksRef.current.onToolCall!(name, args || {});
+                    sendResponse({ success: true, message: result?.message || `Executed ${name}.` });
                   } catch (err: any) {
-                    console.error('Voice tool execution failed:', err);
-                    sendResponse({ success: false, message: `Failed: ${err.message || 'Unknown error'}` });
+                    sendResponse({ success: false, message: `Failed: ${err.message}` });
                   }
                 };
-                processCall();
+                processGeneric();
+                continue;
+              }
+
+              if (name === 'trigger_smart_itinerary_generation' && args) {
+                const processSmart = async () => {
+                  try {
+                    await callbacksRef.current.onTriggerSmartItinerary?.(args.intensity, args.dayNumbers);
+                    sendResponse({ success: true, message: `Started smart generation with intensity: ${args.intensity || 'balanced'}.` });
+                  } catch (err: any) {
+                    sendResponse({ success: false, message: `Failed: ${err.message}` });
+                  }
+                };
+                processSmart();
+              } else if (name === 'update_itinerary' && args) {
+                const processUpdate = async () => {
+                  try {
+                    // Route to bulk update agent via onToolCall or legacy onUpdateItinerary
+                    if (callbacksRef.current.onToolCall) {
+                      await callbacksRef.current.onToolCall(name, args);
+                    } else {
+                      await callbacksRef.current.onUpdateItinerary?.(args as any);
+                    }
+                    sendResponse({ success: true, message: `Bulk itinerary update applied.` });
+                  } catch (err: any) {
+                    sendResponse({ success: false, message: `Failed: ${err.message}` });
+                  }
+                };
+                processUpdate();
               } else if (name === 'remove_from_itinerary' && args) {
                 const processRemove = async () => {
                   try {
@@ -629,102 +521,54 @@ export function useLiveGemini({
                   } catch (err: any) {
                     sendResponse({ success: false, message: `Failed to remove: ${err.message}` });
                   }
-                }
+                };
                 processRemove();
               } else if (name === 'update_trip_details' && args) {
-                const processUpdate = async () => {
+                const p = async () => {
                   try {
                     await callbacksRef.current.onUpdateTripDetails?.(args as any);
-                    sendResponse({ success: true, message: `Updated trip parameters: ${Object.keys(args).join(', ')}` });
-                  } catch (err: any) {
-                    sendResponse({ success: false, message: `Failed to update details: ${err.message}` });
-                  }
-                }
-                processUpdate();
-              } else if (name === 'clear_day' && args) {
-                const processClearDay = async () => {
-                  try {
-                    await callbacksRef.current.onClearDay?.(args as any);
-                    sendResponse({ success: true, message: `Cleared activities for Day ${args.day}` });
-                  } catch (err: any) {
-                    sendResponse({ success: false, message: `Failed to clear: ${err.message}` });
-                  }
-                };
-                processClearDay();
-              } else if (name === 'clear_itinerary') {
-                const processClearAll = async () => {
-                  try {
-                    await callbacksRef.current.onClearItinerary?.();
-                    sendResponse({ success: true, message: `Cleared entire itinerary successfully.` });
-                  } catch (err: any) {
-                    sendResponse({ success: false, message: `Failed to clear: ${err.message}` });
-                  }
-                };
-                processClearAll();
-              } else if (name === 'trigger_smart_itinerary_generation' && args) {
-                const processSmart = async () => {
-                  try {
-                    const { intensity, dayNumbers } = args as any;
-                    await callbacksRef.current.onTriggerSmartItinerary?.(intensity, dayNumbers);
-                    sendResponse({ success: true, message: `Started smart generation with intensity: ${intensity || 'balanced'}. Tell the user to wait a few seconds.` });
+                    sendResponse({ success: true, message: `Updated trip parameters.` });
                   } catch (err: any) {
                     sendResponse({ success: false, message: `Failed: ${err.message}` });
                   }
                 };
-                processSmart();
-              } else if (name === 'generate_itinerary' && args) {
-                const processLaunch = async () => {
+                p();
+              } else if (name === 'clear_day' && args) {
+                const p = async () => {
                   try {
-                    sendResponse({ success: true, message: `Launching itinerary with mode: ${args.planningMode}` });
-                    await new Promise(r => setTimeout(r, 100));
-                    await callbacksRef.current.onUpdateItinerary?.({ ...args, type: 'launch_itinerary' });
+                    await callbacksRef.current.onClearDay?.(args as any);
+                    sendResponse({ success: true, message: `Cleared Day ${args.day}` });
                   } catch (err: any) {
-                    sendResponse({ success: false, message: `Failed to launch: ${err.message}` });
+                    sendResponse({ success: false, message: `Failed: ${err.message}` });
                   }
-                }
-                processLaunch();
-              } else if (name === 'search_google_places' && args) {
-                const query = (args as any).query;
-                searchPlacesAsync(query).then(results => {
-                  if (results.length > 0) {
-                    callbacksRef.current.onShowUICard?.(results[0]);
+                };
+                p();
+              } else if (name === 'clear_itinerary') {
+                const p = async () => {
+                  try {
+                    await callbacksRef.current.onClearItinerary?.();
+                    sendResponse({ success: true, message: `Cleared entire itinerary.` });
+                  } catch (err: any) {
+                    sendResponse({ success: false, message: `Failed: ${err.message}` });
                   }
+                };
+                p();
+              } else if (name === 'searchGooglePlaces' && args) {
+                searchPlacesAsync(args.query).then(results => {
+                  if (results.length > 0) callbacksRef.current.onShowUICard?.(results[0]);
                   sendResponse({ results: results.slice(0, 3) });
-                }).catch(err => {
-                  sendResponse({ success: false, message: `Search failed: ${err.message}` });
-                });
-              } else if (name === 'search_flights' && args) {
-                const { origin } = args as any;
-                callbacksRef.current.onShowUICard?.({
-                  id: 'mock-flight-' + Date.now(),
-                  title: { en: `Flight: ${origin} ✈️ Destination`, cs: `Let: ${origin} ✈️ Cíl` },
-                  category: 'Transport',
-                  duration: 240,
-                  imageUrl: 'https://images.unsplash.com/photo-1436491865332-7a615061c443?auto=format&fit=crop&q=80&w=800',
-                });
-                sendResponse({ success: true, message: `Showed flights for ${origin}` });
-              } else if (name === 'set_traveler_profiles' && args) {
-                const processProfiles = async () => {
-                  try {
-                    await callbacksRef.current.onUpdateTripDetails?.(args as any);
-                    sendResponse({ success: true, message: `Updated ${args.travelers?.length || 0} traveler profiles.` });
-                  } catch (err: any) {
-                    sendResponse({ success: false, message: `Failed to update traveler profiles: ${err.message}` });
-                  }
-                };
-                processProfiles();
-              } else if (name === 'set_packing_requirements' && args) {
-                const processPacking = async () => {
-                  try {
-                    await callbacksRef.current.onUpdateTripDetails?.({ packingRequirements: (args as any).requirements });
-                    sendResponse({ success: true, message: `Updated packing requirements.` });
-                  } catch (err: any) {
-                    sendResponse({ success: false, message: `Failed to update packing requirements: ${err.message}` });
-                  }
-                };
-                processPacking();
+                }).catch(err => sendResponse({ success: false, message: err.message }));
               } else {
-                sendResponse({ success: true, message: `Tool ${name} executed (no side effect).` });
+                // Route all other tools (atomic mutations) through onToolCall
+                const processGeneric = async () => {
+                  try {
+                    const result = await callbacksRef.current.onToolCall?.(name, args || {});
+                    sendResponse({ success: true, message: result?.message || `Executed ${name}.` });
+                  } catch (err: any) {
+                    sendResponse({ success: false, message: `Failed: ${err.message}` });
+                  }
+                };
+                processGeneric();
               }
             }
           }

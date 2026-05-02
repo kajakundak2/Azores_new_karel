@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
-import { POI, FIXED_EVENTS, Trip } from './data';
+import { POI, FIXED_EVENTS, Trip, Stay, Flight } from './data';
 import { db } from './firebase';
 import { doc, onSnapshot, setDoc, getDoc, collection, addDoc, updateDoc, deleteDoc, arrayUnion, arrayRemove } from 'firebase/firestore';
 import { searchPlacesAsync } from './hooks/usePlacesSearch';
@@ -112,6 +112,116 @@ export function calcDayDuration(items: POI[]): number {
     return items.reduce((sum, item) => sum + (item.duration || 0), 0);
 }
 
+/** Serialize the entire trip state into a rich text context for Sara AI. */
+export function getFullTripContext(trip: Trip | null, itinerary: Record<string, POI[]>): string {
+    if (!trip) return 'No active trip.';
+    const startDate = parseDateString(trip.startDate);
+    const endDate = parseDateString(trip.endDate);
+    const totalDays = Math.round((endDate.getTime() - startDate.getTime()) / 86400000) + 1;
+
+    let ctx = `=== TRIP ===\nTitle: ${trip.title} | Destination: ${trip.destination}\n`;
+    ctx += `Dates: ${trip.startDate} → ${trip.endDate} (${totalDays} days)\n`;
+    ctx += `Travelers: ${trip.travelers} total (${trip.adults || trip.travelers} adults, ${trip.kids || 0} kids)`;
+    if (trip.kidsAges?.length) ctx += ` | Kids ages: ${trip.kidsAges.join(', ')}`;
+    ctx += '\n';
+    if (trip.preferences) ctx += `Preferences: ${trip.preferences}\n`;
+    if (trip.planningMode) ctx += `Planning mode: ${trip.planningMode}\n`;
+
+    // Traveler profiles
+    if (trip.travelerProfiles?.length) {
+        ctx += '\n=== TRAVELERS ===\n';
+        trip.travelerProfiles.forEach(p => ctx += `- ${p.name} (${p.gender}${p.age ? `, age ${p.age}` : ''})\n`);
+    }
+
+    // Stays
+    if (trip.logistics?.stays?.length) {
+        ctx += '\n=== STAYS ===\n';
+        trip.logistics.stays.forEach(s => {
+            ctx += `- ${s.name}: ${s.checkInDate} → ${s.checkOutDate} (${s.nights} nights)`;
+            if (s.pricePerNight) ctx += `, €${s.pricePerNight}/night`;
+            if (s.address) ctx += `, ${s.address}`;
+            if (s.rating) ctx += `, rating: ${s.rating}`;
+            ctx += '\n';
+        });
+    }
+
+    // Flights
+    if (trip.logistics?.flights?.length) {
+        ctx += '\n=== FLIGHTS ===\n';
+        trip.logistics.flights.forEach(f => {
+            ctx += `- ${f.direction}: ${f.airline}, ${f.departureAirport} → ${f.arrivalAirport}`;
+            ctx += `, depart: ${f.departureTime}, arrive: ${f.arrivalTime}`;
+            if (f.price) ctx += `, ${f.price}`;
+            if (f.stops > 0) ctx += `, ${f.stops} stop(s)`;
+            ctx += '\n';
+        });
+    }
+
+    // Itinerary with full POI details
+    ctx += '\n=== ITINERARY ===\n';
+    for (let i = 0; i < totalDays; i++) {
+        const d = new Date(startDate);
+        d.setDate(startDate.getDate() + i);
+        const dayIso = toLocalIso(d);
+        const dayPois = itinerary[dayIso] || [];
+        const theme = trip.dayThemes?.[dayIso];
+        ctx += `\nDay ${i + 1} (${dayIso})`;
+        if (theme) ctx += ` [Theme: "${theme}"]`;
+        ctx += '\n';
+        if (dayPois.length === 0) {
+            ctx += '  (empty)\n';
+        } else {
+            dayPois.forEach((p, idx) => {
+                const title = typeof p.title === 'string' ? p.title : p.title.en;
+                ctx += `  ${idx + 1}. ${title} [${p.category}]`;
+                if (p.time) ctx += ` — ${p.time}`;
+                if (p.duration) ctx += `, ${p.duration}min`;
+                if (p.cost) ctx += `, €${p.cost}`;
+                if (p.transportModeTo) ctx += `, transport: ${p.transportModeTo}`;
+                ctx += '\n';
+                if (p.address) ctx += `     Address: ${p.address}\n`;
+                if (p.rating) ctx += `     Rating: ${p.rating}${p.reviewCount ? ` (${p.reviewCount} reviews)` : ''}\n`;
+            });
+        }
+    }
+
+    // Budget summary
+    let staysCost = 0, actCost = 0, flightsCost = 0;
+    trip.logistics?.stays?.forEach(s => { if (s.pricePerNight) staysCost += s.pricePerNight * s.nights; });
+    Object.values(itinerary).forEach(pois => pois.forEach(p => { if (p.cost) actCost += p.cost; }));
+    trip.logistics?.flights?.forEach(f => { if (f.price) flightsCost += parseFloat(f.price.replace(/[^0-9.]/g, '')) || 0; });
+    if (staysCost || actCost || flightsCost) {
+        ctx += `\n=== BUDGET ===\n`;
+        ctx += `Stays: €${staysCost} | Activities: €${actCost} | Flights: €${flightsCost} | Total: €${staysCost + actCost + flightsCost}\n`;
+    }
+
+    // Packing
+    if (trip.logistics?.packingRequirements) {
+        ctx += `\n=== PACKING ===\nRequirements: ${trip.logistics.packingRequirements}\n`;
+    }
+
+    // Library
+    if (trip.libraryPois?.length) {
+        ctx += `\n=== LIBRARY (${trip.libraryPois.length} saved places) ===\n`;
+        trip.libraryPois.slice(0, 20).forEach(p => {
+            const title = typeof p.title === 'string' ? p.title : p.title.en;
+            ctx += `- ${title} [${p.category}]`;
+            if (p.address) ctx += ` — ${p.address}`;
+            ctx += '\n';
+        });
+    }
+
+    // Reference documents
+    if (trip.referenceDocs?.length) {
+        ctx += `\n=== REFERENCE DOCUMENTS ===\n`;
+        trip.referenceDocs.forEach(d => {
+            ctx += `- ${d.name}: ${d.content.substring(0, 3000)}\n`;
+        });
+    }
+
+    return ctx;
+}
+
 export interface TripState {
     trips: Trip[];
     activeTripId: string | null;
@@ -130,7 +240,7 @@ export interface TripState {
     clearDay: (dayIso: string) => Promise<void>;
     clearItinerary: () => Promise<void>;
     
-    // New operations
+    // Trip CRUD
     setActiveTripId: (id: string | null) => void;
     createTrip: (tripData: Partial<Trip>) => Promise<string>;
     updateTrip: (id: string, tripData: Partial<Trip>) => Promise<void>;
@@ -139,6 +249,21 @@ export interface TripState {
     removeReferenceDoc: (docId: string) => Promise<void>;
     updatePoi: (poi: POI) => Promise<void>;
     isGeneratingLibrary: boolean;
+
+    // Sara AI atomic mutations
+    movePoi: (fromDayIso: string, toDayIso: string, poiId: string) => Promise<void>;
+    modifyPoi: (dayIso: string, poiId: string, changes: Partial<POI>) => Promise<void>;
+    reorderPois: (dayIso: string, orderedIds: string[]) => Promise<void>;
+    addStay: (stay: Omit<Stay, 'id'>) => Promise<void>;
+    removeStay: (stayId: string) => Promise<void>;
+    modifyStay: (stayId: string, changes: Partial<Stay>) => Promise<void>;
+    addFlight: (flight: Omit<Flight, 'id'>) => Promise<void>;
+    removeFlight: (flightId: string) => Promise<void>;
+    addDay: () => Promise<void>;
+    removeDay: (dayIso: string) => Promise<void>;
+    setDayTheme: (dayIso: string, theme: string) => Promise<void>;
+    addToLibrary: (poi: POI) => Promise<void>;
+    removeFromLibrary: (poiId: string) => Promise<void>;
 }
 
 export function useItineraryState(): TripState {
@@ -251,7 +376,7 @@ export function useItineraryState(): TripState {
                     }
 
                     // Save to Firestore
-                    await updateDoc(doc(db, 'trips', activeTrip!.id), updates);
+                    await updateDoc(doc(db, 'trips', activeTrip!.id), sanitizeForFirestore(updates));
                 } catch (err) {
                     console.error('Failed to generate trip assets:', err);
                 } finally {
@@ -469,6 +594,180 @@ export function useItineraryState(): TripState {
         }
     }, [activeTripId, activeTrip]);
 
+    // ── Sara AI Atomic Mutations ──────────────────────────────────────────
+
+    const movePoi = useCallback(async (fromDayIso: string, toDayIso: string, poiId: string) => {
+        if (!activeTripId || !activeTrip) return;
+        const fromItems = itinerary[fromDayIso] || [];
+        const poi = fromItems.find(p => p.id === poiId);
+        if (!poi) return;
+
+        const newFrom = fromItems.filter(p => p.id !== poiId);
+        const toItems = itinerary[toDayIso] || [];
+        const autoTime = getNextTime(toItems);
+        const poiWithTime = { ...poi, time: autoTime };
+
+        const tripRef = doc(db, 'trips', activeTripId);
+        await updateDoc(tripRef, sanitizeForFirestore({
+            [`itinerary.${fromDayIso}`]: newFrom,
+            [`itinerary.${toDayIso}`]: [...toItems, poiWithTime]
+        }));
+    }, [activeTripId, activeTrip, itinerary]);
+
+    const modifyPoi = useCallback(async (dayIso: string, poiId: string, changes: Partial<POI>) => {
+        if (!activeTripId || !activeTrip) return;
+        const currentItems = itinerary[dayIso] || [];
+        const index = currentItems.findIndex(p => p.id === poiId);
+        if (index === -1) return;
+
+        const updatedItems = [...currentItems];
+        updatedItems[index] = { ...updatedItems[index], ...changes };
+
+        const tripRef = doc(db, 'trips', activeTripId);
+        await updateDoc(tripRef, {
+            [`itinerary.${dayIso}`]: sanitizeForFirestore(updatedItems)
+        });
+    }, [activeTripId, activeTrip, itinerary]);
+
+    const reorderPois = useCallback(async (dayIso: string, orderedIds: string[]) => {
+        if (!activeTripId || !activeTrip) return;
+        const currentItems = itinerary[dayIso] || [];
+        const reordered: POI[] = [];
+        for (const id of orderedIds) {
+            const poi = currentItems.find(p => p.id === id);
+            if (poi) reordered.push(poi);
+        }
+        // Add any items not in the ordered list at the end
+        for (const poi of currentItems) {
+            if (!orderedIds.includes(poi.id)) reordered.push(poi);
+        }
+
+        const tripRef = doc(db, 'trips', activeTripId);
+        await updateDoc(tripRef, {
+            [`itinerary.${dayIso}`]: sanitizeForFirestore(reordered)
+        });
+    }, [activeTripId, activeTrip, itinerary]);
+
+    const addStay = useCallback(async (stay: Omit<Stay, 'id'>) => {
+        if (!activeTripId || !activeTrip) return;
+        const newStay: Stay = {
+            ...stay,
+            id: `stay-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+            nights: Math.max(1, Math.round((parseDateString(stay.checkOutDate).getTime() - parseDateString(stay.checkInDate).getTime()) / 86400000))
+        };
+        const tripRef = doc(db, 'trips', activeTripId);
+        await updateDoc(tripRef, {
+            'logistics.stays': arrayUnion(sanitizeForFirestore(newStay))
+        });
+    }, [activeTripId, activeTrip]);
+
+    const removeStay = useCallback(async (stayId: string) => {
+        if (!activeTripId || !activeTrip) return;
+        const stays = activeTrip.logistics?.stays || [];
+        const stayToRemove = stays.find(s => s.id === stayId);
+        if (!stayToRemove) return;
+        const tripRef = doc(db, 'trips', activeTripId);
+        await updateDoc(tripRef, {
+            'logistics.stays': arrayRemove(stayToRemove)
+        });
+    }, [activeTripId, activeTrip]);
+
+    const modifyStay = useCallback(async (stayId: string, changes: Partial<Stay>) => {
+        if (!activeTripId || !activeTrip) return;
+        const stays = [...(activeTrip.logistics?.stays || [])];
+        const idx = stays.findIndex(s => s.id === stayId);
+        if (idx === -1) return;
+        stays[idx] = { ...stays[idx], ...changes };
+        if (changes.checkInDate || changes.checkOutDate) {
+            const ci = parseDateString(stays[idx].checkInDate);
+            const co = parseDateString(stays[idx].checkOutDate);
+            stays[idx].nights = Math.max(1, Math.round((co.getTime() - ci.getTime()) / 86400000));
+        }
+        const tripRef = doc(db, 'trips', activeTripId);
+        await updateDoc(tripRef, {
+            'logistics.stays': sanitizeForFirestore(stays)
+        });
+    }, [activeTripId, activeTrip]);
+
+    const addFlight = useCallback(async (flight: Omit<Flight, 'id'>) => {
+        if (!activeTripId || !activeTrip) return;
+        const newFlight: Flight = {
+            ...flight,
+            id: `flight-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+            durationMins: flight.durationMins || 0,
+            stops: flight.stops || 0
+        };
+        const tripRef = doc(db, 'trips', activeTripId);
+        await updateDoc(tripRef, {
+            'logistics.flights': arrayUnion(sanitizeForFirestore(newFlight))
+        });
+    }, [activeTripId, activeTrip]);
+
+    const removeFlight = useCallback(async (flightId: string) => {
+        if (!activeTripId || !activeTrip) return;
+        const flights = activeTrip.logistics?.flights || [];
+        const flightToRemove = flights.find(f => f.id === flightId);
+        if (!flightToRemove) return;
+        const tripRef = doc(db, 'trips', activeTripId);
+        await updateDoc(tripRef, {
+            'logistics.flights': arrayRemove(flightToRemove)
+        });
+    }, [activeTripId, activeTrip]);
+
+    const addDay = useCallback(async () => {
+        if (!activeTripId || !activeTrip) return;
+        const endDate = parseDateString(activeTrip.endDate);
+        endDate.setDate(endDate.getDate() + 1);
+        const tripRef = doc(db, 'trips', activeTripId);
+        await updateDoc(tripRef, { endDate: toLocalIso(endDate) });
+    }, [activeTripId, activeTrip]);
+
+    const removeDay = useCallback(async (dayIso: string) => {
+        if (!activeTripId || !activeTrip) return;
+        const newItinerary = { ...itinerary };
+        delete newItinerary[dayIso];
+        // Check if removing a day at the end
+        const endDate = parseDateString(activeTrip.endDate);
+        if (dayIso === toLocalIso(endDate)) {
+            endDate.setDate(endDate.getDate() - 1);
+            const tripRef = doc(db, 'trips', activeTripId);
+            await updateDoc(tripRef, sanitizeForFirestore({
+                endDate: toLocalIso(endDate),
+                itinerary: newItinerary
+            }));
+        } else {
+            const tripRef = doc(db, 'trips', activeTripId);
+            await updateDoc(tripRef, sanitizeForFirestore({ itinerary: newItinerary }));
+        }
+    }, [activeTripId, activeTrip, itinerary]);
+
+    const setDayTheme = useCallback(async (dayIso: string, theme: string) => {
+        if (!activeTripId) return;
+        const tripRef = doc(db, 'trips', activeTripId);
+        await updateDoc(tripRef, {
+            [`dayThemes.${dayIso}`]: theme
+        });
+    }, [activeTripId]);
+
+    const addToLibrary = useCallback(async (poi: POI) => {
+        if (!activeTripId) return;
+        const tripRef = doc(db, 'trips', activeTripId);
+        await updateDoc(tripRef, {
+            libraryPois: arrayUnion(sanitizeForFirestore(poi))
+        });
+    }, [activeTripId]);
+
+    const removeFromLibrary = useCallback(async (poiId: string) => {
+        if (!activeTripId || !activeTrip) return;
+        const library = activeTrip.libraryPois || [];
+        const itemToRemove = library.find(p => p.id === poiId);
+        if (!itemToRemove) return;
+        const tripRef = doc(db, 'trips', activeTripId);
+        await updateDoc(tripRef, {
+            libraryPois: arrayRemove(itemToRemove)
+        });
+    }, [activeTripId, activeTrip]);
+
     return { 
         trips, 
         activeTripId, 
@@ -490,6 +789,20 @@ export function useItineraryState(): TripState {
         addReferenceDoc,
         removeReferenceDoc,
         updatePoi,
-        isGeneratingLibrary
+        isGeneratingLibrary,
+        // Sara AI atomic mutations
+        movePoi,
+        modifyPoi,
+        reorderPois,
+        addStay,
+        removeStay,
+        modifyStay,
+        addFlight,
+        removeFlight,
+        addDay,
+        removeDay,
+        setDayTheme,
+        addToLibrary,
+        removeFromLibrary
     };
 }

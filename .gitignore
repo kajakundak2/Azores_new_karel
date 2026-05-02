@@ -6,3 +6,8 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Graphify Output
+graphify-out/
+.agents/
+.agent/

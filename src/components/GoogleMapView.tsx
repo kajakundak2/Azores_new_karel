@@ -179,28 +179,38 @@ function ClassicMarkers({
 function MultimodalDirections({
   pois,
   color,
+  lang = 'en',
 }: {
   pois: POI[];
   color: string;
+  lang?: string;
 }) {
   const map = useMap();
-  const polylinesRef = useRef<google.maps.Polyline[]>([]);
+  const geometryLib = useMapsLibrary('geometry');
+  const markerLib = useMapsLibrary('marker');
+  const mapObjectsRef = useRef<any[]>([]);
 
   useEffect(() => {
-    if (!map || typeof google === 'undefined' || !google.maps?.routes?.Route) return;
+    if (!map || typeof google === 'undefined' || !google.maps?.routes?.Route || !geometryLib || !markerLib) return;
     
-    // Clear old polylines
-    polylinesRef.current.forEach(p => p.setMap(null));
-    polylinesRef.current = [];
+    // Clear old map objects (Handles both Polylines and AdvancedMarkerElements)
+    mapObjectsRef.current.forEach(obj => {
+      if (typeof obj.setMap === 'function') {
+        obj.setMap(null);
+      } else {
+        obj.map = null;
+      }
+    });
+    mapObjectsRef.current = [];
 
     const located = pois.filter(p => p.location);
     if (located.length < 2) return;
 
     const modeToTravelMode: Record<string, string> = {
-      car: 'DRIVE',
-      walk: 'WALK',
+      car: 'DRIVING',
+      walk: 'WALKING',
       bus: 'TRANSIT',
-      bicycle: 'BICYCLE',
+      bicycle: 'BICYCLING',
     };
 
     const fetchRoutes = async () => {
@@ -209,79 +219,260 @@ function MultimodalDirections({
         const to = located[i + 1];
         
         const mode = to.transportModeTo || 'car';
-        const googleMode = modeToTravelMode[mode] || 'DRIVE';
+        const googleMode = modeToTravelMode[mode] || 'DRIVING';
+
+        const fallbackPoints = [
+          { lat: from.location!.lat, lng: from.location!.lng },
+          { lat: to.location!.lat, lng: to.location!.lng },
+        ];
 
         try {
           const request: any = {
             origin: { lat: from.location!.lat, lng: from.location!.lng },
             destination: { lat: to.location!.lat, lng: to.location!.lng },
             travelMode: googleMode,
-            fields: ['path'],
+            fields: ['*'], // Request deep transit and scheduling details
           };
 
           if (googleMode === 'TRANSIT') {
             request.departureTime = new Date();
+            request.computeAlternativeRoutes = true;
           }
 
           const response = await google.maps.routes.Route.computeRoutes(request);
 
           if (response.routes && response.routes.length > 0) {
             const route = response.routes[0];
-            // Extract path from route or legs
-            let pathPoints: google.maps.LatLngLiteral[] = [];
             
-            if (route.path && route.path.length > 0) {
-              pathPoints = route.path.map((p: any) => ({ lat: p.lat(), lng: p.lng() }));
-            } else if (route.legs) {
-              // Fallback: build path from leg steps
+            // Helper to safely extract coordinates natively or from legacy classes
+            const getPt = (p: any) => ({
+              lat: typeof p.lat === 'function' ? p.lat() : p.lat,
+              lng: typeof p.lng === 'function' ? p.lng() : p.lng
+            });
+
+            if (googleMode === 'TRANSIT' && route.legs) {
               for (const leg of route.legs) {
-                if (leg.steps) {
-                  for (const step of leg.steps) {
-                    if ((step as any).path) {
-                      for (const pt of (step as any).path) {
-                        pathPoints.push({ lat: pt.lat(), lng: pt.lng() });
+                if (!leg.steps) continue;
+                
+                for (const step of leg.steps) {
+                  let stepPathPoints: google.maps.LatLngLiteral[] = [];
+                  
+                  if ((step as any).polyline?.encodedPolyline) {
+                    const decoded = geometryLib.encoding.decodePath((step as any).polyline.encodedPolyline);
+                    stepPathPoints = decoded.map(getPt);
+                  } else if ((step as any).path) {
+                    stepPathPoints = (step as any).path.map(getPt);
+                  } else if ((step as any).startLocation && (step as any).endLocation) {
+                    stepPathPoints.push(getPt((step as any).startLocation));
+                    stepPathPoints.push(getPt((step as any).endLocation));
+                  }
+                  
+                  if (stepPathPoints.length < 2) continue;
+
+                  const isWalking = (step as any).travelMode === 'WALK' || (step as any).travelMode === 'WALKING';
+                  const isTransit = (step as any).travelMode === 'TRANSIT';
+                  
+                  const stepColor = isTransit ? ((step as any).transitDetails?.line?.color || '#3b82f6') : (isWalking ? '#0ea5e9' : color);
+                  
+                  const polyline = new google.maps.Polyline({
+                    path: stepPathPoints,
+                    strokeColor: stepColor,
+                    strokeOpacity: isWalking ? 0 : 0.8,
+                    strokeWeight: isWalking ? 0 : 6,
+                    icons: isWalking ? [{
+                      icon: { path: 'M 0,-1 0,1', strokeOpacity: 1, strokeWeight: 4, scale: 1 },
+                      offset: '0',
+                      repeat: '10px'
+                    }] : [],
+                    map: map,
+                    zIndex: isTransit ? 50 : 10,
+                  });
+                  mapObjectsRef.current.push(polyline);
+                  
+                  // Inject Detailed Transit Schedule Pop-Up
+                  if (isTransit && (step as any).transitDetails) {
+                    const details = (step as any).transitDetails;
+                    const t = createT(lang);
+                    const lineInfo = details.transitLine || details.line;
+                    const vehicleName = lineInfo?.vehicle?.name || 'Transit';
+                    const shortName = lineInfo?.shortName || lineInfo?.name || '';
+                    
+                    const getFmtTime = (nested: any) => {
+                      if (details.localizedValues?.[nested]?.time?.text) return details.localizedValues[nested].time.text;
+                      const r = details.stopDetails?.[nested] || details[nested];
+                      if (r?.text) return r.text;
+                      if (r instanceof Date) return r.toLocaleTimeString(lang === 'cs' ? 'cs-CZ' : 'en-US', { hour: '2-digit', minute:'2-digit' });
+                      if (typeof r === 'string') return new Date(r).toLocaleTimeString(lang === 'cs' ? 'cs-CZ' : 'en-US', { hour: '2-digit', minute:'2-digit' });
+                      return 'N/A';
+                    };
+
+                    const alternatives: { departureTime: string, arrivalTime: string }[] = [];
+                    if (response.routes.length > 1) {
+                      response.routes.slice(1).forEach((altRoute: any) => {
+                        const altLeg = altRoute.legs?.[0];
+                        const altTransitStep = altLeg?.steps?.find((s: any) => s.travelMode === 'TRANSIT');
+                        const altTd = altTransitStep?.transitDetails;
+                        if (altTd) {
+                          const dep = getFmtTimeAltMap(altTd, 'departureTime');
+                          const arr = getFmtTimeAltMap(altTd, 'arrivalTime');
+                          if (dep && arr) alternatives.push({ departureTime: dep, arrivalTime: arr });
+                        }
+                      });
+                    }
+
+                    function getFmtTimeAltMap(td: any, nested: any) {
+                      if (td.localizedValues?.[nested]?.time?.text) return td.localizedValues[nested].time.text;
+                      const r = td.stopDetails?.[nested] || td[nested];
+                      if (r?.text) return r.text;
+                      if (r instanceof Date) return r.toLocaleTimeString(lang === 'cs' ? 'cs-CZ' : 'en-US', { hour: '2-digit', minute:'2-digit' });
+                      if (typeof r === 'string') return new Date(r).toLocaleTimeString(lang === 'cs' ? 'cs-CZ' : 'en-US', { hour: '2-digit', minute:'2-digit' });
+                      return '';
+                    }
+
+                    const infoWin = new google.maps.InfoWindow({
+                      content: `
+                        <div style="padding: 10px; font-family: system-ui; min-width: 220px; color: #0f172a;">
+                          <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
+                            <div style="background: ${stepColor}; color: white; padding: 4px 8px; border-radius: 6px; font-weight: bold; font-size: 12px; letter-spacing: 0.5px;">
+                              🚌 ${shortName}
+                            </div>
+                            <span style="font-size: 13px; font-weight: 700; color: #334155;">${vehicleName}</span>
+                          </div>
+                          <div style="font-size: 13px; display: flex; flex-direction: column; gap: 8px;">
+                            <div style="display: flex; align-items: flex-start; gap: 10px;">
+                              <div style="margin-top: 2px;">🟢</div>
+                              <div>
+                                <div style="font-weight: 700; max-width: 170px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${details.stopDetails?.departureStop?.name || details.departureStop?.name || 'Start stop'}</div>
+                                <div style="color: #64748b; font-size: 12px; font-weight: 500;">${t('transport_departs')}: ${getFmtTime('departureTime')}</div>
+                              </div>
+                            </div>
+                            <div style="border-left: 2px dashed #cbd5e1; margin-left: 9px; padding-left: 18px; color: #64748b; font-size: 11px; font-weight: 600; height: 24px; display: flex; align-items: center;">
+                              ${details.stopCount || 0} ${t('transit_stops')}
+                            </div>
+                            <div style="display: flex; align-items: flex-start; gap: 10px;">
+                              <div style="margin-top: 2px;">📍</div>
+                              <div>
+                                <div style="font-weight: 700; max-width: 170px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${details.stopDetails?.arrivalStop?.name || details.arrivalStop?.name || 'End stop'}</div>
+                                <div style="color: #64748b; font-size: 12px; font-weight: 500;">${t('transit_arrives')}: ${getFmtTime('arrivalTime')}</div>
+                              </div>
+                            </div>
+                          </div>
+                          ${alternatives.length > 0 ? `
+                            <div style="margin-top: 12px; padding-top: 10px; border-top: 1px solid #f1f5f9;">
+                              <div style="font-size: 10px; font-weight: 800; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;">${t('transit_other_times')}</div>
+                              <div style="display: flex; flex-direction: column; gap: 6px;">
+                                ${alternatives.map(alt => `
+                                  <div style="display: flex; justify-content: space-between; font-size: 11px; font-weight: 600; color: #475569;">
+                                    <span>🚌 ${alt.departureTime}</span>
+                                    <span style="color: #94a3b8;">→ ${alt.arrivalTime}</span>
+                                  </div>
+                                `).join('')}
+                              </div>
+                            </div>
+                          ` : ''}
+                        </div>
+                      `,
+                    });
+                    
+                    // Create a modern custom UI tag for the transit marker
+                    const pinContainer = document.createElement('div');
+                    pinContainer.style.backgroundColor = stepColor;
+                    pinContainer.style.borderRadius = '8px';
+                    pinContainer.style.padding = '4px 8px';
+                    pinContainer.style.color = 'white';
+                    pinContainer.style.fontWeight = 'bold';
+                    pinContainer.style.fontSize = '12px';
+                    pinContainer.style.boxShadow = '0 4px 6px rgba(0,0,0,0.2)';
+                    pinContainer.style.border = '2px solid white';
+                    pinContainer.style.cursor = 'pointer';
+                    pinContainer.textContent = '🚌 ' + shortName;
+
+                    const marker = new markerLib.AdvancedMarkerElement({
+                      map,
+                      position: stepPathPoints[0],
+                      content: pinContainer,
+                      title: `${vehicleName} ${shortName} Schedule`,
+                      zIndex: 100,
+                    });
+                    mapObjectsRef.current.push(marker);
+
+                    // Block click from bubbling down to the underlying map POIs
+                    const preventAndOpen = (e: any) => {
+                      if (e.stop) e.stop(); // Stops Maps native click (avoids e.placeId firing)
+                      if (e.domEvent) e.domEvent.stopPropagation(); // Stops DOM bubbling
+                    };
+
+                    marker.addListener('click', (e: any) => {
+                      preventAndOpen(e);
+                      infoWin.open(map, marker);
+                    });
+
+                    // Clicking the drawn bus line will ALSO open the schedule without opening Google Maps links
+                    polyline.addListener('click', (e: any) => {
+                      preventAndOpen(e);
+                      infoWin.setPosition(e.latLng);
+                      infoWin.open(map);
+                    });
+                  }
+                }
+              }
+            } else {
+              // =========================================================================
+              // SINGLE-MODE ROUTES (Car, Bicycle, Pure Walking)
+              // =========================================================================
+              let pathPoints: google.maps.LatLngLiteral[] = [];
+              if ((route as any).polyline && (route as any).polyline.encodedPolyline) {
+                const decoded = geometryLib.encoding.decodePath((route as any).polyline.encodedPolyline);
+                pathPoints = decoded.map(getPt);
+              } else if ((route as any).path) {
+                pathPoints = (route as any).path.map(getPt);
+              } else if (route.legs) {
+                for (const leg of route.legs) {
+                  if (leg.steps) {
+                    for (const step of leg.steps) {
+                      if ((step as any).polyline?.encodedPolyline) {
+                        const decoded = geometryLib.encoding.decodePath((step as any).polyline.encodedPolyline);
+                        pathPoints.push(...decoded.map(getPt));
+                      } else if ((step as any).path) {
+                        pathPoints.push(...(step as any).path.map(getPt));
+                      } else if ((step as any).startLocation && (step as any).endLocation) {
+                        pathPoints.push(getPt((step as any).startLocation));
+                        pathPoints.push(getPt((step as any).endLocation));
                       }
-                    } else if ((step as any).startLocation && (step as any).endLocation) {
-                      pathPoints.push({ lat: (step as any).startLocation.lat(), lng: (step as any).startLocation.lng() });
-                      pathPoints.push({ lat: (step as any).endLocation.lat(), lng: (step as any).endLocation.lng() });
                     }
                   }
                 }
               }
-            }
 
-            // If we still have no path, draw a straight line as fallback
-            if (pathPoints.length < 2) {
-              pathPoints = [
-                { lat: from.location!.lat, lng: from.location!.lng },
-                { lat: to.location!.lat, lng: to.location!.lng },
-              ];
-            }
+              if (pathPoints.length < 2) pathPoints = fallbackPoints;
 
-            const polyline = new google.maps.Polyline({
-              path: pathPoints,
-              strokeColor: mode === 'bus' ? '#3b82f6' : mode === 'bicycle' ? '#10b981' : mode === 'walk' ? '#94a3b8' : color,
-              strokeWeight: mode === 'walk' ? 4 : 5,
-              strokeOpacity: 0.8,
-              map: map,
-            });
-            polylinesRef.current.push(polyline);
+              const isPureWalking = mode === 'walk';
+              const polyline = new google.maps.Polyline({
+                path: pathPoints,
+                strokeColor: mode === 'bicycle' ? '#10b981' : isPureWalking ? '#0ea5e9' : color,
+                strokeWeight: isPureWalking ? 0 : 4,
+                strokeOpacity: isPureWalking ? 0 : 0.8,
+                icons: isPureWalking ? [{
+                  icon: { path: 'M 0,-1 0,1', strokeOpacity: 1, strokeWeight: 4, scale: 1 },
+                  offset: '0',
+                  repeat: '10px'
+                }] : [],
+                map: map,
+              });
+              mapObjectsRef.current.push(polyline);
+            }
           }
         } catch (error) {
           console.error("Error computing route segment:", error);
-          // Fallback: draw straight line
           const polyline = new google.maps.Polyline({
-            path: [
-              { lat: from.location!.lat, lng: from.location!.lng },
-              { lat: to.location!.lat, lng: to.location!.lng },
-            ],
+            path: fallbackPoints,
             strokeColor: color,
             strokeWeight: 3,
             strokeOpacity: 0.4,
             geodesic: true,
             map: map,
           });
-          polylinesRef.current.push(polyline);
+          mapObjectsRef.current.push(polyline);
         }
       }
     };
@@ -289,10 +480,13 @@ function MultimodalDirections({
     fetchRoutes();
 
     return () => {
-      polylinesRef.current.forEach(p => p.setMap(null));
-      polylinesRef.current = [];
+      mapObjectsRef.current.forEach(obj => {
+        if (typeof obj.setMap === 'function') obj.setMap(null);
+        else obj.map = null;
+      });
+      mapObjectsRef.current = [];
     };
-  }, [map, pois, color]);
+  }, [map, pois, color, geometryLib, markerLib, lang]);
 
   return null;
 }
@@ -487,7 +681,7 @@ function GoogleMapInner({
 
   useEffect(() => {
     if (!map || !placesLib || typeof google === 'undefined') return;
-    const listener = map.addListener('click', async (e: any) => {
+    const clickListener = map.addListener('click', async (e: any) => {
       if (e.placeId) {
         if (e.stop) e.stop();
         
@@ -511,8 +705,26 @@ function GoogleMapInner({
       }
     });
 
+    const contextListener = map.addListener('contextmenu', (e: any) => {
+      if (e.latLng) {
+        const lat = e.latLng.lat();
+        const lng = e.latLng.lng();
+        const droppedPoi: POI = {
+          id: `dropped-${Date.now()}`,
+          title: { en: t('dropped_pin') || 'Dropped Pin', cs: t('dropped_pin') || 'Přidaný bod' },
+          category: 'Special',
+          duration: 60,
+          location: { lat, lng },
+          address: `${lat.toFixed(5)}, ${lng.toFixed(5)}`,
+          googleMapsUrl: `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`
+        };
+        handlePlaceSelect(droppedPoi);
+      }
+    });
+
     return () => {
-      google.maps.event.removeListener(listener);
+      google.maps.event.removeListener(clickListener);
+      google.maps.event.removeListener(contextListener);
     };
   }, [map, placesLib, handlePlaceSelect]);
 
@@ -779,6 +991,7 @@ function GoogleMapInner({
         <MultimodalDirections
           pois={routePois}
           color={DAY_COLORS[activeDayIdx % DAY_COLORS.length]}
+          lang={lang}
         />
       )}
     </>

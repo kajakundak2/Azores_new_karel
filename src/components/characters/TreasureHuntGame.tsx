@@ -1,399 +1,367 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { X, Play, Trophy, Loader2, Check, Clock, ChevronRight } from 'lucide-react';
-import { collection, addDoc, query, where, orderBy, limit, getDocs, serverTimestamp } from 'firebase/firestore';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { collection, addDoc, query, orderBy, limit, getDocs, where, Timestamp } from 'firebase/firestore';
 import { db } from '../../firebase';
-import { GoogleGenAI } from '@google/genai';
-import confetti from 'canvas-confetti';
 import { TEXTS } from '../../data';
+import { useGameEngine, type Tile, type Phase, type Difficulty, type CharacterChoice, type Biome } from '../../hooks/useGameEngine';
+import confetti from 'canvas-confetti';
+import './VacationDisasters.css';
 
-interface TreasureHuntGameProps {
-  isOpen: boolean;
-  onClose: () => void;
-  onComplete?: () => void;
-  destination: string;
-  theme?: 'light' | 'dark';
-  lang: string;
-  apiKey: string;
-}
+interface Props { isOpen: boolean; onClose: () => void; language: 'en' | 'cs'; }
 
-interface Question {
-  question: string;
-  options: string[];
-  correctOptionIndex: number;
-  clue: string;
-}
+const IMG = '/pictures/guides/';
 
-interface TreasureScore {
-  id?: string;
-  playerName: string;
-  destination: string;
-  timeSec: number;
-  correctAnswers: number;
-  createdAt?: any;
-}
+const CHAR_IMAGES: Record<string, Record<string, string>> = {
+  kaja: { select: 'kaja_waiving.png', idle: 'Kaja.png', disaster: 'kaja_pedro_lost.png', flag: 'kaja_surfing.png', won: 'kaja_pedro_found.png', gameover: 'sara_bored.png', 'gear-beach': 'kaja_surfing.png', 'gear-ocean': 'pedro_diving.png', 'gear-snow': 'kaja_skiing.png', 'gear-jungle': 'Pedro_karel_jeep.png', high: 'sara_thinking.png', saving: 'pedro_suitcase_packed.png' },
+  pedro: { select: 'pedro_waving.png', idle: 'Pedro.png', disaster: 'pedro_suitcase.png', flag: 'pedro_map.png', won: 'kaja_pedro_found.png', gameover: 'sara_bored.png', 'gear-beach': 'kaja_surfing.png', 'gear-ocean': 'pedro_diving.png', 'gear-snow': 'kaja_skiing.png', 'gear-jungle': 'Pedro_karel_jeep.png', high: 'sara_thinking.png', saving: 'pedro_suitcase_packed.png' },
+  sara: { select: 'sara_waving.png', idle: 'sara_idle.png', disaster: 'kaja_pedro_lost.png', flag: 'pedro_map.png', won: 'sara_excited.png', gameover: 'sara_bored.png', 'gear-beach': 'kaja_surfing.png', 'gear-ocean': 'pedro_diving.png', 'gear-snow': 'kaja_skiing.png', 'gear-jungle': 'Pedro_karel_jeep.png', high: 'sara_thinking.png', saving: 'sara_typing.png' },
+};
 
-export function TreasureHuntGame({ isOpen, onClose, onComplete, destination, theme = 'dark', lang, apiKey }: TreasureHuntGameProps) {
-  const [phase, setPhase] = useState<'lost' | 'clues' | 'found'>('lost');
-  const [questions, setQuestions] = useState<Question[]>([]);
-  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
-  const [timeSec, setTimeSec] = useState(0);
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [correctAnswersCount, setCorrectAnswersCount] = useState(0);
+const BIOME_EMOJIS: Record<Biome, string> = { none: '', beach: '🏖️', ocean: '🌊', snow: '❄️', jungle: '🌴' };
+const TILE_EMOJIS = { disaster: '💥', treasure: '💎', flag: '🚩' };
+const GEAR_LABELS: Record<string, string> = { 'gear-beach': '🏄', 'gear-ocean': '🤿', 'gear-snow': '⛷️', 'gear-jungle': '🚙' };
+
+function t(key: string, lang: 'en' | 'cs') { return (TEXTS as Record<string, Record<string, string>>)[key]?.[lang] || key; }
+
+// AI logic disabled as requested to avoid rate limits/version issues
+// Using local fallbacks for game flavor text
+
+const DISASTER_PROMPTS = [
+  'Lost luggage at the airport', 'Food poisoning from street food', 'Sunburn on day one',
+  'Got scammed by a taxi driver', 'Hotel room has no AC', 'Missed the ferry',
+  'Stepped on a sea urchin', 'Camera fell in the ocean', 'Allergic reaction to local cuisine',
+  'Flight delayed 8 hours', 'Passport got soaked', 'Wrong bus to nowhere',
+];
+
+export function TreasureHuntGame({ isOpen, onClose, language }: Props) {
+  const engine = useGameEngine();
+  const { phase, grid, hearts, score, timeSec, flagsPlaced, unlockedBiomes, lastEvent, character, gridSize, totalDisasters, disastersHit } = engine;
+
+  const [menuChar, setMenuChar] = useState<CharacterChoice>('kaja');
+  const [menuDiff, setMenuDiff] = useState<Difficulty>('medium');
+  const [speechText, setSpeechText] = useState('');
   const [playerName, setPlayerName] = useState('');
-  const [leaderboard, setLeaderboard] = useState<TreasureScore[]>([]);
-  const [isSaving, setIsSaving] = useState(false);
-  const [hasSaved, setHasSaved] = useState(false);
-  const [selectedOption, setSelectedOption] = useState<number | null>(null);
-  const [showExplanation, setShowExplanation] = useState(false);
-  
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const [showLB, setShowLB] = useState(false);
+  const [lbTab, setLbTab] = useState<'daily'|'alltime'>('daily');
+  const [lbData, setLbData] = useState<{name:string;score:number;date:string}[]>([]);
+  const [scoreSaved, setScoredSaved] = useState(false);
 
-  const t = (key: string) => TEXTS[key]?.[lang] || key;
+  const currentImage = useMemo(() => {
+    const imgs = CHAR_IMAGES[character] || CHAR_IMAGES.kaja;
+    if (phase === 'menu') return imgs.select;
+    if (phase === 'won') return imgs.won;
+    if (phase === 'gameover') return imgs.gameover;
+    const ev = lastEvent;
+    if (ev.type === 'disaster') return imgs.disaster;
+    if (ev.type === 'flag') return imgs.flag;
+    if (ev.type === 'number-high') return imgs.high;
+    if (ev.type === 'gear' && ev.gearType) return imgs[ev.gearType] || imgs.idle;
+    if (ev.type === 'saving') return imgs.saving;
+    return imgs.idle;
+  }, [character, phase, lastEvent]);
 
-  // Cleanup timer
+  // Local flavor text on events
   useEffect(() => {
-    if (!isOpen) {
-      if (timerRef.current) clearInterval(timerRef.current);
-      setPhase('lost');
-      setQuestions([]);
-      setCurrentQuestionIndex(0);
-      setTimeSec(0);
-      setCorrectAnswersCount(0);
-      setHasSaved(false);
-      setPlayerName('');
+    if (lastEvent.type === 'disaster') {
+      const fallbacks = ['💥 Ouch! That was a disaster!', '💥 My luggage! My pride!', '💥 This is not the vacation I paid for!', '💥 Everything is fine... (it is not)', '💥 Lost my passport in the jungle!', '💥 Sunburned on day one. Classic.'];
+      setSpeechText(fallbacks[Math.floor(Math.random() * fallbacks.length)]);
+    } else if (lastEvent.type === 'treasure' || lastEvent.type === 'won') {
+      setSpeechText('🎉 WE FOUND IT!');
+    } else if (lastEvent.type === 'gear') {
+      const label = lastEvent.gearType ? GEAR_LABELS[lastEvent.gearType] || '🎒' : '🎒';
+      setSpeechText(`${label} New gear unlocked! Let's explore!`);
+    } else if (lastEvent.type === 'flag') {
+      setSpeechText('🚩 Marked! Stay away from there!');
+    } else if (lastEvent.type === 'number-high') {
+      setSpeechText('😰 Something bad is very close...');
+    } else if (lastEvent.type === 'gameover') {
+      setSpeechText(t('game_over_subtitle', language));
+    } else if (lastEvent.type === 'safe') {
+      const quips = ['Looking good...', 'Safe so far!', 'Keep going!', 'Nothing here 🍃', 'All clear!'];
+      setSpeechText(quips[Math.floor(Math.random() * quips.length)]);
     }
-  }, [isOpen]);
+  }, [lastEvent, language]);
 
-  const startGame = async () => {
-    setIsGenerating(true);
+  // Confetti on win
+  useEffect(() => {
+    if (phase === 'won') {
+      const end = Date.now() + 2000;
+      const frame = () => {
+        confetti({ particleCount: 3, angle: 60, spread: 55, origin: { x: 0 } });
+        confetti({ particleCount: 3, angle: 120, spread: 55, origin: { x: 1 } });
+        if (Date.now() < end) requestAnimationFrame(frame);
+      };
+      frame();
+    }
+  }, [phase]);
+
+  const loadLeaderboard = useCallback(async (tab: 'daily'|'alltime') => {
     try {
-      const ai = new GoogleGenAI({ apiKey });
-      const prompt = lang === 'cs' 
-        ? `Vytvoř 3 zajímavé trivia otázky o destinaci: ${destination}. Formát odpovědi MUSÍ být přesný JSON bez formátování markdown. JSON struktura pole objektů: [{ "question": "Text otázky", "options": ["Možnost A", "B", "C", "D"], "correctOptionIndex": 0, "clue": "Krátké rozuzlení nebo zajímavost k odpovědi" }]`
-        : `Generate 3 interesting trivia questions about the destination: ${destination}. The response MUST be exactly JSON without markdown formatting. Array of objects: [{ "question": "Question text", "options": ["Option A", "B", "C", "D"], "correctOptionIndex": 0, "clue": "Short explanation or interesting fact for the answer" }]`;
-      
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.1-flash-lite-preview',
-        contents: prompt,
-        config: { responseMimeType: "application/json" }
-      });
-      
-      let parsed: Question[] = [];
-      try {
-        const text = response.text || "[]";
-        parsed = JSON.parse(text);
-      } catch (e) {
-        console.error("Failed to parse AI questions", e);
-        // Fallback questions if AI fails formatting
-        parsed = [
-          { question: "What is a famous landmark here?", options: ["Mountain", "River", "Castle", "Valey"], correctOptionIndex: 0, clue: "They are usually high!" },
-          { question: "What is the typical food?", options: ["Pasta", "Sushi", "Stew", "Burger"], correctOptionIndex: 2, clue: "It takes hours to cook." },
-          { question: "Best way to travel around?", options: ["Car", "Walk", "Train", "Swim"], correctOptionIndex: 0, clue: "Wheels keep on turning." },
-        ];
+      let q;
+      if (tab === 'daily') {
+        const today = new Date(); today.setHours(0,0,0,0);
+        q = query(collection(db, 'treasure_scores'), where('timestamp', '>=', Timestamp.fromDate(today)), orderBy('score', 'desc'), limit(10));
+      } else {
+        q = query(collection(db, 'treasure_scores'), orderBy('score', 'desc'), limit(10));
       }
-      
-      setQuestions(parsed.slice(0, 3));
-      setPhase('clues');
-      setCurrentQuestionIndex(0);
-      setTimeSec(0);
-      setCorrectAnswersCount(0);
-      
-      timerRef.current = setInterval(() => {
-        setTimeSec(t => t + 1);
-      }, 1000);
-      
-    } catch (error) {
-      console.error(error);
-    } finally {
-      setIsGenerating(false);
-    }
-  };
+      const snap = await getDocs(q);
+      setLbData(snap.docs.map(d => { const data = d.data() as Record<string, any>; return { name: data.name, score: data.score, date: data.timestamp?.toDate?.()?.toLocaleDateString() || '' }; }));
+    } catch { setLbData([]); }
+  }, []);
 
-  const handleAnswer = (index: number) => {
-    if (selectedOption !== null) return; // Prevent double clicking
-    setSelectedOption(index);
-    setShowExplanation(true);
-    
-    if (index === questions[currentQuestionIndex].correctOptionIndex) {
-      setCorrectAnswersCount(c => c + 1);
-    }
-  };
-
-  const handleNext = () => {
-    setSelectedOption(null);
-    setShowExplanation(false);
-    
-    if (currentQuestionIndex < questions.length - 1) {
-      setCurrentQuestionIndex(i => i + 1);
-    } else {
-      // Game finished
-      if (timerRef.current) clearInterval(timerRef.current);
-      setPhase('found');
-      triggerConfetti();
-      fetchLeaderboard();
-      if (onComplete) onComplete();
-    }
-  };
-
-  const triggerConfetti = () => {
-    confetti({
-      particleCount: 100,
-      spread: 70,
-      origin: { y: 0.6 },
-      colors: ['#10B981', '#F59E0B', '#3B82F6']
-    });
-  };
-
-  const saveScore = async () => {
-    if (!playerName.trim() || hasSaved) return;
-    setIsSaving(true);
+  const saveScore = useCallback(async () => {
+    if (!playerName.trim() || scoreSaved) return;
     try {
       await addDoc(collection(db, 'treasure_scores'), {
-        playerName: playerName.trim(),
-        destination,
-        timeSec,
-        correctAnswers: correctAnswersCount,
-        createdAt: serverTimestamp(),
+        name: playerName.trim(), score, character,
+        difficulty: engine.difficulty, timestamp: Timestamp.now(),
       });
-      setHasSaved(true);
-      await fetchLeaderboard();
-    } catch (err) {
-      console.error("Failed to save score:", err);
-    } finally {
-      setIsSaving(false);
-    }
-  };
+      setScoredSaved(true);
+      engine.setLastEvent({ type: 'saving' });
+      loadLeaderboard(lbTab);
+    } catch (e) { console.error('Save failed', e); }
+  }, [playerName, score, scoreSaved, character, engine, lbTab, loadLeaderboard]);
 
-  const fetchLeaderboard = async () => {
-    try {
-      const q = query(
-        collection(db, 'treasure_scores'),
-        where('destination', '==', destination),
-        orderBy('timeSec', 'asc'),
-        limit(10)
-      );
-      const snap = await getDocs(q);
-      const results = snap.docs.map(d => ({ id: d.id, ...d.data() } as TreasureScore));
-      // Since order matters, let's also sort locally just in case 
-      results.sort((a, b) => {
-        if (b.correctAnswers !== a.correctAnswers) {
-           return b.correctAnswers - a.correctAnswers; // Highest correct first
-        }
-        return a.timeSec - b.timeSec; // Then lowest time
-      });
-      setLeaderboard(results);
-    } catch (err) {
-      console.error("Failed to load leaderboard:", err);
-    }
-  };
+  const handleStart = useCallback(() => {
+    engine.startGame(menuDiff, menuChar);
+    setScoredSaved(false);
+    setShowLB(false);
+    setSpeechText('Let\'s find that treasure! 🗺️');
+  }, [engine, menuDiff, menuChar]);
 
-  const formatTime = (seconds: number) => {
-    const m = Math.floor(seconds / 60);
-    const s = seconds % 60;
-    return `${m}:${s.toString().padStart(2, '0')}`;
-  };
+  const handleTileClick = useCallback((tile: Tile) => {
+    if (tile.flagged) return;
+    if (tile.revealed && tile.kind !== 'treasure' && !tile.kind.startsWith('gear-')) return;
+    
+    if (tile.biome !== 'none' && !unlockedBiomes.has(tile.biome)) {
+      const gearNeeded = `gear-${tile.biome}`;
+      const gearLabel = GEAR_LABELS[gearNeeded] || '❓';
+      const biomeName = tile.biome.charAt(0).toUpperCase() + tile.biome.slice(1);
+      setSpeechText(language === 'en' 
+        ? `🔒 This ${biomeName} is locked! You need ${gearLabel} gear first!` 
+        : `🔒 Tato oblast (${biomeName}) je zamčená! Potřebuješ vybavení ${gearLabel}!`);
+      return;
+    }
+    engine.revealTile(tile.row, tile.col);
+  }, [engine, unlockedBiomes, language]);
+
+  const handleRightClick = useCallback((e: React.MouseEvent, tile: Tile) => {
+    e.preventDefault();
+    engine.toggleFlag(tile.row, tile.col);
+  }, [engine]);
+
+  const formatTime = (s: number) => `${Math.floor(s/60)}:${(s%60).toString().padStart(2,'0')}`;
 
   if (!isOpen) return null;
 
+  // ───── MENU SCREEN ─────
+  if (phase === 'menu') {
+    return (
+      <div className="vd-overlay" onClick={onClose}>
+        <div className="vd-modal" onClick={e => e.stopPropagation()}>
+          <div className="vd-header">
+            <div><h1>{t('game_title', language)}</h1><span>{t('game_subtitle', language)}</span></div>
+            <button className="vd-close" onClick={onClose}>{t('game_close', language)}</button>
+          </div>
+          <div className="vd-menu">
+            <h2>🏝️ {t('game_title', language)}</h2>
+            <h3>{t('game_subtitle', language)}</h3>
+
+            <div className="vd-menu-section">
+              <h4>{t('game_select_character', language)}</h4>
+              <div className="vd-char-picks">
+                {(['kaja','pedro','sara'] as CharacterChoice[]).map(c => (
+                  <div key={c} className={`vd-char-pick ${menuChar===c?'selected':''}`} onClick={() => setMenuChar(c)}>
+                    <img src={`${IMG}${CHAR_IMAGES[c].select}`} alt={c} />
+                    <span>{c.charAt(0).toUpperCase()+c.slice(1)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="vd-menu-section">
+              <h4>{t('game_select_difficulty', language)}</h4>
+              <div className="vd-diff-picks">
+                {(['easy','medium','hard'] as Difficulty[]).map(d => (
+                  <div key={d} className={`vd-diff-pick ${menuDiff===d?'selected':''}`} onClick={() => setMenuDiff(d)}>
+                    <strong>{t(`game_${d}`, language)}</strong>
+                    <span>{t(`game_${d}_desc`, language)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <button className="vd-start-btn" onClick={handleStart}>{t('game_start_adventure', language)}</button>
+            <span className="vd-hint">{t('game_reveal_hint', language)}</span>
+
+            <div className="vd-how-to">
+              <h5>🗺️ {language === 'en' ? 'How to Play' : 'Jak hrát'}</h5>
+              <ul>
+                <li>{language === 'en' ? 'Reveal tiles to find the Diamond Treasure 💎' : 'Odhaluj políčka a najdi poklad 💎'}</li>
+                <li>{language === 'en' ? 'Numbers show how many Disasters 💥 are nearby' : 'Čísla ukazují, kolik nehod 💥 je v okolí'}</li>
+                <li>{language === 'en' ? 'Pick up Gear (🚙, ⛷️, 🤿, 🏄) to unlock biomes!' : 'Sbírej vybavení (🚙, ⛷️, 🤿, 🏄) pro odemknutí biomů!'}</li>
+                <li>{language === 'en' ? 'Locked tiles (🔒) need specific Gear to be opened' : 'Zamčená pole (🔒) vyžadují konkrétní vybavení'}</li>
+                <li>{language === 'en' ? 'Don\'t run out of Hearts ❤️ (Patience)!' : 'Nesmí ti dojít srdíčka ❤️ (Trpělivost)!'}</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ───── END SCREENS (won / gameover) ─────
+  if (phase === 'won' || phase === 'gameover') {
+    const isWin = phase === 'won';
+    const speedBonus = Math.max(0, (180 - timeSec) * 10);
+    const heartsBonus = hearts * 500;
+    const perfectBonus = disastersHit === 0 ? 2000 : 0;
+
+    return (
+      <div className="vd-overlay">
+        <div className="vd-modal" onClick={e => e.stopPropagation()}>
+          <div className="vd-header">
+            <div><h1>{t('game_title', language)}</h1></div>
+            <button className="vd-close" onClick={onClose}>{t('game_close', language)}</button>
+          </div>
+          <div className="vd-endscreen">
+            <h2 className={isWin ? 'won' : 'lost'}>{isWin ? t('game_won_title', language) : t('game_over_title', language)}</h2>
+            <img src={`${IMG}${currentImage}`} alt="result" />
+            <p style={{color:'#a1a1aa',fontStyle:'italic',margin:0}}>{speechText}</p>
+
+            {isWin && (
+              <div className="vd-score-breakdown">
+                <div className="vd-score-row"><span>Base</span><span>1,000</span></div>
+                <div className="vd-score-row"><span>{t('game_speed_bonus', language)}</span><span>{speedBonus.toLocaleString()}</span></div>
+                <div className="vd-score-row"><span>{t('game_hearts_bonus', language)}</span><span>{heartsBonus.toLocaleString()}</span></div>
+                {perfectBonus > 0 && <div className="vd-score-row"><span>✨ {t('game_perfect_bonus', language)}</span><span>{perfectBonus.toLocaleString()}</span></div>}
+                <div className="vd-score-row total"><span>{t('game_score', language)}</span><span>{score.toLocaleString()}</span></div>
+              </div>
+            )}
+
+            {isWin && !scoreSaved && (
+              <div style={{display:'flex',gap:8,alignItems:'center'}}>
+                <input className="vd-name-input" placeholder={t('game_enter_name', language)} value={playerName} onChange={e => setPlayerName(e.target.value)} maxLength={20} />
+                <button className="vd-btn primary" onClick={saveScore} disabled={!playerName.trim()}>{t('game_save_score', language)}</button>
+              </div>
+            )}
+            {scoreSaved && <span style={{color:'#34d399',fontSize:'.85rem'}}>✅ Score saved!</span>}
+
+            <div className="vd-btn-row">
+              <button className="vd-btn primary" onClick={() => engine.resetToMenu()}>{t('game_play_again', language)}</button>
+              <button className="vd-btn" onClick={() => { setShowLB(!showLB); if (!showLB) loadLeaderboard(lbTab); }}>{t('game_leaderboard', language)}</button>
+            </div>
+
+            {showLB && (
+              <div className="vd-leaderboard">
+                <div className="vd-lb-tabs">
+                  <button className={`vd-lb-tab ${lbTab==='daily'?'active':''}`} onClick={()=>{setLbTab('daily');loadLeaderboard('daily');}}>{t('game_daily', language)}</button>
+                  <button className={`vd-lb-tab ${lbTab==='alltime'?'active':''}`} onClick={()=>{setLbTab('alltime');loadLeaderboard('alltime');}}>{t('game_alltime', language)}</button>
+                </div>
+                {lbData.length === 0 ? <p style={{color:'#71717a',fontSize:'.8rem',textAlign:'center'}}>No scores yet</p> :
+                  lbData.map((e,i) => (
+                    <div key={i} className="vd-lb-entry">
+                      <span className="rank">#{i+1}</span>
+                      <span className="name">{e.name}</span>
+                      <span className="pts">{e.score.toLocaleString()}</span>
+                    </div>
+                  ))
+                }
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ───── PLAYING SCREEN ─────
+  const allBiomes: Biome[] = ['beach','ocean','snow','jungle'];
+
   return (
-    <div className={`fixed inset-0 z-50 flex items-center justify-center p-4 backdrop-blur-md bg-black/60`}>
-      <motion.div 
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ opacity: 1, scale: 1 }}
-        exit={{ opacity: 0, scale: 0.95 }}
-        className={`relative w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-3xl shadow-2xl p-6 md:p-8 ${theme === 'dark' ? 'bg-zinc-950 text-white' : 'bg-white text-slate-900 border border-slate-200'}`}
-      >
-        <button 
-          onClick={onClose}
-          className={`absolute top-4 right-4 p-2 rounded-full ${theme === 'dark' ? 'bg-white/10 hover:bg-white/20 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-600'}`}
-        >
-          <X className="w-5 h-5" />
-        </button>
-
-        <AnimatePresence mode="wait">
-          {phase === 'lost' && (
-            <motion.div 
-              key="lost"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              className="flex flex-col items-center text-center space-y-6 pt-4"
-            >
-              <div className="w-48 h-48 rounded-2xl overflow-hidden bg-slate-200 shadow-inner">
-                {/* Fallback image if kaja_pedro_lost.png is missing */}
-                <img src="/pictures/kaja_pedro_lost.png" alt="Lost explorers" className="w-full h-full object-cover" 
-                     onError={(e) => { e.currentTarget.src = 'https://images.unsplash.com/photo-1518398046578-8cca57782e17?auto=format&fit=crop&w=400&q=80' }}/>
-              </div>
-              <div>
-                <h2 className="text-3xl font-black uppercase tracking-tight mb-2">
-                  {t('treasure_help_find')}
-                </h2>
-                <p className={`text-sm ${theme === 'dark' ? 'text-white/60' : 'text-slate-500'}`}>
-                  {t('treasure_lost')}
-                </p>
-              </div>
-              
-              <button 
-                onClick={startGame}
-                disabled={isGenerating}
-                className="flex items-center gap-2 px-8 py-4 bg-emerald-500 hover:bg-emerald-600 text-slate-950 rounded-2xl font-black uppercase tracking-widest transition-all"
-              >
-                {isGenerating ? <Loader2 className="w-5 h-5 animate-spin" /> : <Play className="w-5 h-5 fill-current" />}
-                {isGenerating ? t('treasure_preparing') : t('treasure_start')}
-              </button>
-            </motion.div>
-          )}
-
-          {phase === 'clues' && questions.length > 0 && (
-            <motion.div 
-              key="clues"
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -20 }}
-              className="flex flex-col space-y-6"
-            >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 font-black uppercase">
-                  <span className={`px-3 py-1 rounded-full text-xs ${theme === 'dark' ? 'bg-white/10' : 'bg-slate-100'}`}>
-                    Q {currentQuestionIndex + 1} / {questions.length}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2 font-mono font-bold text-lg text-emerald-500">
-                  <Clock className="w-5 h-5" />
-                  {formatTime(timeSec)}
+    <div className="vd-overlay">
+      <div className="vd-modal" onClick={e => e.stopPropagation()}>
+        <div className="vd-header">
+          <div><h1>{t('game_title', language)}</h1><span>{t('game_subtitle', language)}</span></div>
+          <button className="vd-close" onClick={() => { engine.resetToMenu(); onClose(); }}>{t('game_close', language)}</button>
+        </div>
+        <div className="vd-body">
+          {/* SIDEBAR */}
+          <div className="vd-sidebar">
+            <div className="vd-avatar-box">
+              <img src={`${IMG}${currentImage}`} alt={character} />
+            </div>
+            <div className="vd-speech">{speechText || '🗺️ Click a tile to explore!'}</div>
+            <div className="vd-stats">
+              <div className="vd-stat">
+                <div className="vd-stat-label">{t('game_patience', language)}</div>
+                <div className="vd-stat-val hearts">
+                  {'❤️'.repeat(Math.max(0, Math.min(3, Number(hearts) || 0)))}
+                  {'🖤'.repeat(Math.max(0, 3 - (Number(hearts) || 0)))}
                 </div>
               </div>
-
-              <div className="space-y-4">
-                <h3 className="text-xl md:text-2xl font-bold leading-tight">
-                  {questions[currentQuestionIndex].question}
-                </h3>
-                
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-6">
-                  {questions[currentQuestionIndex].options.map((opt, idx) => {
-                    let btnClass = theme === 'dark' 
-                      ? 'bg-white/5 hover:bg-white/10 border-white/10' 
-                      : 'bg-white hover:bg-slate-50 border-slate-200';
-                      
-                    if (showExplanation) {
-                      if (idx === questions[currentQuestionIndex].correctOptionIndex) {
-                        btnClass = 'bg-emerald-500/20 border-emerald-500 text-emerald-600 dark:text-emerald-400';
-                      } else if (idx === selectedOption) {
-                        btnClass = 'bg-rose-500/20 border-rose-500 text-rose-600 dark:text-rose-400';
-                      } else {
-                        btnClass = theme === 'dark' ? 'bg-white/5 opacity-50 border-white/5' : 'bg-slate-50 opacity-50 border-slate-100';
-                      }
-                    }
-
-                    return (
-                      <button
-                        key={idx}
-                        onClick={() => handleAnswer(idx)}
-                        disabled={showExplanation}
-                        className={`p-4 rounded-2xl border text-left transition-all font-medium ${btnClass}`}
-                      >
-                        {opt}
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
-
-              {showExplanation && (
-                <motion.div 
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className={`p-4 rounded-2xl mt-4 ${theme === 'dark' ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-200' : 'bg-emerald-50 border border-emerald-200 text-emerald-900'}`}
-                >
-                  <p className="font-medium text-sm md:text-base leading-relaxed">
-                    {questions[currentQuestionIndex].clue}
-                  </p>
-                  
-                  <div className="flex justify-end mt-4">
-                    <button 
-                      onClick={handleNext}
-                      className="flex items-center gap-2 px-6 py-2 bg-emerald-500 hover:bg-emerald-600 text-slate-950 rounded-xl font-bold uppercase tracking-wider text-sm"
-                    >
-                      {t('treasure_next')} <ChevronRight className="w-4 h-4" />
-                    </button>
+              <div className="vd-stat"><div className="vd-stat-label">{t('game_time', language)}</div><div className="vd-stat-val">{formatTime(timeSec)}</div></div>
+              <div className="vd-stat"><div className="vd-stat-label">{t('game_score', language)}</div><div className="vd-stat-val score">{score}</div></div>
+              <div className="vd-stat"><div className="vd-stat-label">{t('game_flags', language)}</div><div className="vd-stat-val">🚩 {flagsPlaced}/{totalDisasters}</div></div>
+            </div>
+            <div className="vd-gear-bar">
+              {allBiomes.map(b => {
+                const isUnlocked = unlockedBiomes.has(b);
+                return (
+                  <div key={b} className={`vd-gear-item ${isUnlocked ? 'unlocked' : 'locked'}`} title={b}>
+                    <span className="vd-gear-icon">{isUnlocked ? GEAR_LABELS[`gear-${b}`] : '🔒'}</span>
+                    <span className="vd-gear-text">{t(`game_biome_${b}`, language)}</span>
                   </div>
-                </motion.div>
-              )}
-            </motion.div>
-          )}
+                );
+              })}
+            </div>
+          </div>
 
-          {phase === 'found' && (
-            <motion.div 
-              key="found"
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              className="flex flex-col items-center space-y-6 pt-4"
-            >
-              <div className="w-32 h-32 rounded-full overflow-hidden bg-emerald-100 shadow-xl border-4 border-emerald-500">
-                 <img src="/pictures/kaja_pedro_found.png" alt="Found" className="w-full h-full object-cover"
-                      onError={(e) => { e.currentTarget.src = 'https://images.unsplash.com/photo-1533227268428-f9ed0900fb3b?auto=format&fit=crop&w=400&q=80' }} />
-              </div>
-              
-              <div className="text-center">
-                <h2 className="text-3xl font-black uppercase tracking-tight text-emerald-500 mb-1">
-                  {t('treasure_found')}
-                </h2>
-                <div className="flex items-center justify-center gap-4 text-lg font-bold mt-2">
-                  <div className="flex items-center gap-1"><Clock className="w-5 h-5" /> {formatTime(timeSec)}</div>
-                  <div className="flex items-center gap-1"><Check className="w-5 h-5 text-emerald-500" /> {correctAnswersCount}/{questions.length}</div>
-                </div>
-              </div>
+          {/* GRID */}
+          <div className="vd-grid-area">
+            <div className="vd-grid" style={{ gridTemplateColumns: `repeat(${gridSize}, minmax(28px, 52px))` }}>
+              {grid.flat().map((tile, idx) => {
+                const isLocked = tile.biome !== 'none' && !unlockedBiomes.has(tile.biome) && !tile.revealed;
+                let cls = 'vd-tile';
+                if (!tile.revealed) {
+                  cls += ' hidden';
+                  if (tile.flagged) cls += ' flagged';
+                  if (isLocked) cls += ` biome-${tile.biome} locked`;
+                } else {
+                  cls += ' revealed';
+                  if (tile.kind === 'disaster') cls += ' disaster';
+                  if (tile.kind === 'treasure') cls += ' treasure';
+                  if (tile.kind.startsWith('gear-')) cls += ' gear';
+                }
 
-              {!hasSaved ? (
-                <div className="w-full max-w-sm flex gap-2">
-                  <input 
-                    type="text" 
-                    value={playerName}
-                    onChange={e => setPlayerName(e.target.value)}
-                    placeholder={t('treasure_enter_name')}
-                    className={`flex-1 px-4 py-3 rounded-xl border focus:outline-none focus:ring-2 focus:ring-emerald-500 ${theme === 'dark' ? 'bg-white/5 border-white/10 placeholder-white/30' : 'bg-slate-50 border-slate-200 placeholder-slate-400'}`}
-                  />
-                  <button 
-                    onClick={saveScore}
-                    disabled={isSaving || !playerName.trim()}
-                    className="px-6 py-3 bg-emerald-500 text-slate-950 rounded-xl font-bold uppercase disabled:opacity-50"
-                  >
-                    {isSaving ? <Loader2 className="w-5 h-5 animate-spin" /> : t('treasure_save_score')}
-                  </button>
-                </div>
-              ) : (
-                <div className="w-full max-w-md pt-6">
-                  <div className="flex items-center gap-2 mb-4 font-black uppercase tracking-widest text-emerald-500">
-                    <Trophy className="w-5 h-5" />
-                    <h3>{t('treasure_leaderboard')}</h3>
+                let content: React.ReactNode = null;
+                if (tile.flagged && !tile.revealed) {
+                  content = TILE_EMOJIS.flag;
+                } else if (isLocked && !tile.revealed) {
+                  content = <span style={{fontSize:'.7rem',opacity:.7}}>🔒</span>;
+                } else if (!tile.revealed) {
+                  content = tile.biome !== 'none' ? <span style={{fontSize:'.7rem',opacity:.5}}>{BIOME_EMOJIS[tile.biome]}</span> : null;
+                } else if (tile.kind === 'disaster') {
+                  content = TILE_EMOJIS.disaster;
+                } else if (tile.kind === 'treasure') {
+                  content = TILE_EMOJIS.treasure;
+                } else if (tile.kind.startsWith('gear-')) {
+                  content = GEAR_LABELS[tile.kind] || '🎒';
+                } else if (tile.adjacentDisasters > 0) {
+                  content = <span className={`tile-num n${tile.adjacentDisasters}`}>{tile.adjacentDisasters}</span>;
+                }
+
+                return (
+                  <div key={idx} className={cls}
+                    onClick={() => handleTileClick(tile)}
+                    onContextMenu={e => handleRightClick(e, tile)}>
+                    {content}
                   </div>
-                  
-                  <div className={`rounded-2xl border overflow-hidden ${theme === 'dark' ? 'border-white/10 bg-white/5' : 'border-slate-200 bg-slate-50'}`}>
-                    {leaderboard.map((score, idx) => (
-                      <div key={score.id} className={`flex items-center justify-between p-3 text-sm font-medium ${idx !== leaderboard.length - 1 ? (theme === 'dark' ? 'border-b border-white/5' : 'border-b border-slate-200') : ''} ${score.playerName === playerName && score.timeSec === timeSec ? (theme === 'dark' ? 'bg-emerald-500/20 text-emerald-300' : 'bg-emerald-100 text-emerald-900') : ''}`}>
-                        <div className="flex items-center gap-3">
-                          <span className={`w-6 text-center font-black ${idx < 3 ? 'text-amber-500' : 'opacity-50'}`}>{idx + 1}</span>
-                          <span className="font-bold truncate max-w-[120px]">{score.playerName}</span>
-                        </div>
-                        <div className="flex items-center gap-4 opacity-80 font-mono text-xs">
-                          <span>{score.correctAnswers}/{questions.length}</span>
-                          <span>{formatTime(score.timeSec)}</span>
-                        </div>
-                      </div>
-                    ))}
-                    {leaderboard.length === 0 && (
-                      <div className="p-4 text-center text-sm opacity-50">
-                        {t('loading')}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </motion.div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

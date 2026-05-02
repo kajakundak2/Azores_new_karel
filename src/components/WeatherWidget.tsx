@@ -237,7 +237,7 @@ export function WeatherWidget({ destination, startDate, showCompact, targetDate,
       <motion.div 
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        className={`backdrop-blur-3xl border rounded-[2.5rem] p-6 mb-8 overflow-hidden relative group transition-all duration-700 ${theme === 'dark' ? 'bg-zinc-950/80 border-white/5 shadow-2xl shadow-emerald-500/5' : 'bg-white border-slate-200 shadow-xl shadow-slate-200/20'}`}
+        className={`backdrop-blur-3xl border rounded-[2.5rem] p-4 sm:p-6 mb-6 sm:mb-8 overflow-hidden relative group transition-all duration-700 ${theme === 'dark' ? 'bg-zinc-950/80 border-white/5 shadow-2xl shadow-emerald-500/5' : 'bg-white border-slate-200 shadow-xl shadow-slate-200/20'}`}
       >
         <div className="flex items-center gap-3 mb-6">
           <div className={`p-3 rounded-xl ${theme === 'dark' ? 'bg-emerald-500/20' : 'bg-emerald-500/10'}`}>

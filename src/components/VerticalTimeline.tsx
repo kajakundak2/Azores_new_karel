@@ -28,15 +28,18 @@ interface CachedDirection {
     lineName: string;
     departureTime: string;
     arrivalTime: string;
+    departureStop: string;
+    arrivalStop: string;
     numStops: number;
     walkingMins?: number;
+    alternatives?: { departureTime: string; arrivalTime: string }[];
   };
 }
 const directionsCache: Record<string, CachedDirection | 'pending' | 'failed'> = {};
 
-function getCacheKey(prev: POI, next: POI, mode: string): string {
+function getCacheKey(prev: POI, next: POI, mode: string, lang: string): string {
   if (!prev.location || !next.location) return '';
-  return `${prev.location.lat.toFixed(5)},${prev.location.lng.toFixed(5)}-${next.location.lat.toFixed(5)},${next.location.lng.toFixed(5)}-${mode}`;
+  return `${prev.location.lat.toFixed(5)},${prev.location.lng.toFixed(5)}-${next.location.lat.toFixed(5)},${next.location.lng.toFixed(5)}-${mode}-${lang}`;
 }
 
 function naiveFallback(prev: POI, next: POI, mode: string = 'car'): CachedDirection | null {
@@ -57,20 +60,21 @@ function naiveFallback(prev: POI, next: POI, mode: string = 'car'): CachedDirect
 }
 
 const modeToGoogleTravelMode: Record<string, string> = {
-  car: 'DRIVE',
+  car: 'DRIVING',
   bus: 'TRANSIT',
-  walk: 'WALK',
-  bicycle: 'BICYCLE',
+  walk: 'WALKING',
+  bicycle: 'BICYCLING',
 };
 
 // ── Transit Node ──────────────────────────────────────────────────────────────
-const TransitNode = ({ prev, next, onModeChange, theme, lang }: { prev: POI; next: POI; onModeChange: (mode: 'car' | 'bus' | 'walk' | 'bicycle') => void; theme: 'dark' | 'light'; lang: string }) => {
+const TransitNode = ({ prev, next, onModeChange, theme, lang, departureDate }: { prev: POI; next: POI; onModeChange: (mode: 'car' | 'bus' | 'walk' | 'bicycle') => void; theme: 'dark' | 'light'; lang: string; departureDate?: Date }) => {
   const t = createT(lang);
   const currentMode = next.transportModeTo || 'car';
-  const cacheKey = getCacheKey(prev, next, currentMode);
+  const cacheKey = getCacheKey(prev, next, currentMode, lang);
 
   const [routeInfo, setRouteInfo] = React.useState<CachedDirection | null>(null);
   const [isLoading, setIsLoading] = React.useState(false);
+  const [showSchedule, setShowSchedule] = React.useState(false);
 
   useEffect(() => {
     if (!prev.location || !next.location || !cacheKey) return;
@@ -96,19 +100,19 @@ const TransitNode = ({ prev, next, onModeChange, theme, lang }: { prev: POI; nex
     directionsCache[cacheKey] = 'pending';
     setIsLoading(true);
 
-    const googleMode = modeToGoogleTravelMode[currentMode] || 'DRIVE';
+    const googleMode = modeToGoogleTravelMode[currentMode] || 'DRIVING';
 
     const request: any = {
       origin: { lat: prev.location.lat, lng: prev.location.lng },
       destination: { lat: next.location.lat, lng: next.location.lng },
       travelMode: googleMode,
-      // JS SDK field mask does NOT use routes. prefix
-      fields: ['durationMillis', 'distanceMeters', 'path', 'legs'],
+      fields: ['*'], // Request full details
+      computeAlternativeRoutes: googleMode === 'TRANSIT',
     };
     
     // Transit mode REQUIRES departureTime
     if (googleMode === 'TRANSIT') {
-      request.departureTime = new Date();
+      request.departureTime = departureDate || new Date();
     }
 
     google.maps.routes.Route.computeRoutes(request).then((response: any) => {
@@ -132,12 +136,52 @@ const TransitNode = ({ prev, next, onModeChange, theme, lang }: { prev: POI; nex
           const transitStep = leg.steps.find((s: any) => s.travelMode === 'TRANSIT');
           const td = transitStep?.transitDetails;
           if (td) {
+            const getFmtTime = (nested: any) => {
+              if (td.localizedValues?.[nested]?.time?.text) return td.localizedValues[nested].time.text;
+              const r = td.stopDetails?.[nested] || td[nested];
+              if (r?.text) return r.text;
+              if (r instanceof Date) return r.toLocaleTimeString(lang === 'cs' ? 'cs-CZ' : 'en-US', { hour: '2-digit', minute:'2-digit' });
+              if (typeof r === 'string') return new Date(r).toLocaleTimeString(lang === 'cs' ? 'cs-CZ' : 'en-US', { hour: '2-digit', minute:'2-digit' });
+              return '';
+            };
+
             info.transitDetails = {
-              lineName: td.transitLine?.nameShort || td.transitLine?.name || 'Transit',
-              departureTime: td.stopDetails?.departureTime?.text || td.stopDetails?.departureTime || '',
-              arrivalTime: td.stopDetails?.arrivalTime?.text || td.stopDetails?.arrivalTime || '',
+              lineName: td.transitLine?.nameShort || td.transitLine?.name || td.line?.shortName || td.line?.name || 'Transit',
+              departureTime: getFmtTime('departureTime'),
+              arrivalTime: getFmtTime('arrivalTime'),
+              departureStop: td.stopDetails?.departureStop?.name || td.departureStop?.name || '',
+              arrivalStop: td.stopDetails?.arrivalStop?.name || td.arrivalStop?.name || '',
               numStops: td.stopCount || 0,
             };
+            
+            // Override with top-level departure/arrival if missing inside stopDetails
+            if (!info.transitDetails.departureTime && typeof td.departureTime === 'string') {
+               info.transitDetails.departureTime = td.departureTime;
+            }
+            if (!info.transitDetails.arrivalTime && typeof td.arrivalTime === 'string') {
+               info.transitDetails.arrivalTime = td.arrivalTime;
+            }
+
+            // Extract alternatives
+            const alternatives: { departureTime: string; arrivalTime: string }[] = [];
+            if (response.routes.length > 1) {
+              response.routes.slice(1).forEach((altRoute: any) => {
+                const altLeg = altRoute.legs?.[0];
+                const altTransitStep = altLeg?.steps?.find((s: any) => s.travelMode === 'TRANSIT');
+                const altTd = altTransitStep?.transitDetails;
+                if (altTd) {
+                  const dep = getFmtTimeAlt(altTd, 'departureTime');
+                  const arr = getFmtTimeAlt(altTd, 'arrivalTime');
+                  if (dep && arr) {
+                    alternatives.push({ departureTime: dep, arrivalTime: arr });
+                  }
+                }
+              });
+            }
+            if (alternatives.length > 0) {
+              info.transitDetails.alternatives = alternatives;
+            }
+
             // Check for walking segments
             const walkSteps = leg.steps.filter((s: any) => s.travelMode === 'WALKING');
             const totalWalkMs = walkSteps.reduce((sum: number, s: any) => {
@@ -147,6 +191,15 @@ const TransitNode = ({ prev, next, onModeChange, theme, lang }: { prev: POI; nex
               info.transitDetails.walkingMins = Math.round(totalWalkMs / 60000);
             }
           }
+        }
+
+        function getFmtTimeAlt(details: any, nested: any) {
+          if (details.localizedValues?.[nested]?.time?.text) return details.localizedValues[nested].time.text;
+          const r = details.stopDetails?.[nested] || details[nested];
+          if (r?.text) return r.text;
+          if (r instanceof Date) return r.toLocaleTimeString(lang === 'cs' ? 'cs-CZ' : 'en-US', { hour: '2-digit', minute:'2-digit' });
+          if (typeof r === 'string') return new Date(r).toLocaleTimeString(lang === 'cs' ? 'cs-CZ' : 'en-US', { hour: '2-digit', minute:'2-digit' });
+          return '';
         }
 
         directionsCache[cacheKey] = info;
@@ -161,7 +214,7 @@ const TransitNode = ({ prev, next, onModeChange, theme, lang }: { prev: POI; nex
       directionsCache[cacheKey] = 'failed';
       setRouteInfo(naiveFallback(prev, next, currentMode));
     });
-  }, [cacheKey, prev.location, next.location, currentMode]);
+  }, [cacheKey, prev.location, next.location, currentMode, lang]);
 
   const modes = [
     { id: 'car', icon: Car, label: t('transport_car') },
@@ -205,34 +258,87 @@ const TransitNode = ({ prev, next, onModeChange, theme, lang }: { prev: POI; nex
               <Navigation className="w-2.5 h-2.5 animate-spin" /> {t('transit_calculating')}
             </span>
           ) : routeInfo ? (
-            <>
-              <span className="flex items-center gap-1 whitespace-nowrap"><Navigation className="w-2.5 h-2.5" /> ~{routeInfo.durationMins} min</span>
-              <span className="opacity-30">•</span>
-              <span className="whitespace-nowrap">{routeInfo.distanceKm} km</span>
-              {directionsCache[cacheKey] === 'failed' && (
-                <span className={`px-2 py-0.5 rounded-full text-[7px] font-black uppercase tracking-tighter shrink-0 whitespace-nowrap ${theme === 'dark' ? 'bg-amber-500/10 text-amber-500 border border-amber-500/20' : 'bg-amber-50 text-amber-700 border border-amber-200'}`}>
-                   {t('transit_estimated')}
-                </span>
-              )}
-              {routeInfo.transitDetails && (
-                <div className="flex items-center gap-2 ml-2 flex-wrap">
-                  <span className={`px-2 py-0.5 rounded flex items-center gap-1 border whitespace-nowrap ${theme === 'dark' ? 'bg-blue-500/10 border-blue-500/20 text-blue-400' : 'bg-blue-50 border-blue-100 text-blue-600'}`}>
-                    <Bus className="w-2.5 h-2.5" /> {routeInfo.transitDetails.lineName}
+            <div className="flex flex-col w-full pr-4">
+              <a 
+                href={`https://www.google.com/maps/dir/?api=1&origin=${prev.location.lat},${prev.location.lng}&destination=${next.location.lat},${next.location.lng}&travelmode=${currentMode === 'car' ? 'driving' : currentMode === 'bus' ? 'transit' : currentMode === 'walk' ? 'walking' : 'bicycling'}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => {
+                  if (currentMode === 'bus') {
+                    e.preventDefault();
+                    setShowSchedule(s => !s);
+                  }
+                }}
+                className="flex items-center gap-2 flex-wrap hover:opacity-80 transition-opacity cursor-pointer group w-full"
+              >
+                <span className="flex items-center gap-1 whitespace-nowrap"><Navigation className="w-2.5 h-2.5" /> ~{routeInfo.durationMins} min</span>
+                <span className="opacity-30">•</span>
+                <span className="whitespace-nowrap">{routeInfo.distanceKm} km</span>
+                {directionsCache[cacheKey] === 'failed' && (
+                  <span className={`px-2 py-0.5 rounded-full text-[7px] font-black uppercase tracking-tighter shrink-0 whitespace-nowrap ${theme === 'dark' ? 'bg-amber-500/10 text-amber-500 border border-amber-500/20' : 'bg-amber-50 text-amber-700 border border-amber-200'}`}>
+                     {t('transit_estimated')}
                   </span>
-                  {routeInfo.transitDetails.departureTime && (
-                    <span className={`px-2 py-0.5 rounded border whitespace-nowrap ${theme === 'dark' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-emerald-50 border-emerald-100 text-emerald-600'}`}>
-                      {routeInfo.transitDetails.departureTime} → {routeInfo.transitDetails.arrivalTime}
+                )}
+                {routeInfo.transitDetails && (
+                  <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+                    <span className={`px-1.5 sm:px-2 py-0.5 rounded flex items-center gap-1 border whitespace-nowrap transition-colors ${theme === 'dark' ? 'bg-blue-500/10 border-blue-500/20 text-blue-400 group-hover:bg-blue-500/20' : 'bg-blue-50 border-blue-100 text-blue-600 group-hover:bg-blue-100'}`}>
+                      <Bus className="w-2.5 h-2.5" /> {routeInfo.transitDetails.lineName}
                     </span>
-                  )}
-                  {routeInfo.transitDetails.numStops > 0 && (
-                    <span className="opacity-60 whitespace-nowrap">{routeInfo.transitDetails.numStops} {t('transit_stops')}</span>
-                  )}
-                  {routeInfo.transitDetails.walkingMins && routeInfo.transitDetails.walkingMins > 0 && (
-                    <span className="opacity-60 flex items-center gap-0.5 whitespace-nowrap"><Footprints className="w-2 h-2" /> +{routeInfo.transitDetails.walkingMins}min</span>
-                  )}
+                    {routeInfo.transitDetails.departureTime && (
+                      <span className={`px-1.5 sm:px-2 py-0.5 rounded border whitespace-nowrap transition-colors flex items-center gap-1 ${theme === 'dark' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400 group-hover:bg-emerald-500/20' : 'bg-emerald-50 border-emerald-100 text-emerald-600 group-hover:bg-emerald-100'}`}>
+                        <span className="text-[7px] sm:text-[9px]">{routeInfo.transitDetails.departureTime}</span>
+                        {routeInfo.transitDetails.alternatives && routeInfo.transitDetails.alternatives.length > 0 && (
+                          <span className="text-[6px] sm:text-[7px] bg-emerald-500 text-white rounded px-0.5 ml-0.5">+{(routeInfo.transitDetails.alternatives?.length || 0)}</span>
+                        )}
+                         <span className="opacity-40">→</span> <span className="text-[7px] sm:text-[9px]">{routeInfo.transitDetails.arrivalTime}</span>
+                      </span>
+                    )}
+                    {routeInfo.transitDetails.numStops > 0 && (
+                      <span className="opacity-60 whitespace-nowrap text-[8px] sm:text-[9px]">{routeInfo.transitDetails.numStops} {t('transit_stops')}</span>
+                    )}
+                    {routeInfo.transitDetails.walkingMins && routeInfo.transitDetails.walkingMins > 0 && (
+                      <span className="opacity-60 flex items-center gap-0.5 whitespace-nowrap text-[8px] sm:text-[9px]"><Footprints className="w-2 h-2" /> +{routeInfo.transitDetails.walkingMins}min</span>
+                    )}
+                  </div>
+                )}
+              </a>
+              {showSchedule && routeInfo.transitDetails && (
+                <div className={`mt-3 p-3 rounded-lg border w-fit min-w-[250px] shadow-sm transform transition-all ${theme === 'dark' ? 'bg-slate-800/80 border-slate-700 text-slate-300' : 'bg-white border-slate-200 text-slate-700'}`}>
+                  <div className="flex flex-col gap-3">
+                    <div className="flex gap-3">
+                      <div className="flex flex-col items-center mt-1">
+                        <div className="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></div>
+                        <div className={`w-0.5 h-6 my-0.5 ${theme === 'dark' ? 'bg-slate-700' : 'bg-slate-200'}`}></div>
+                        <div className="w-2 h-2 rounded-full border-2 border-emerald-500 shrink-0"></div>
+                      </div>
+                      <div className="flex flex-col gap-3">
+                        <div className="flex flex-col leading-tight">
+                          <span className={`font-bold tracking-tight ${theme === 'dark' ? 'text-white' : 'text-slate-900'}`}>{routeInfo.transitDetails.departureStop || 'Start Stop'}</span>
+                          <span className={`text-[10px] uppercase font-bold tracking-widest ${theme === 'dark' ? 'text-emerald-400' : 'text-emerald-600'}`}>{routeInfo.transitDetails.departureTime || t('transit_wait')}</span>
+                        </div>
+                        <div className="flex flex-col leading-tight">
+                          <span className={`font-bold tracking-tight ${theme === 'dark' ? 'text-white' : 'text-slate-900'}`}>{routeInfo.transitDetails.arrivalStop || 'End Stop'}</span>
+                          <span className={`text-[10px] uppercase font-bold tracking-widest ${theme === 'dark' ? 'text-emerald-400' : 'text-emerald-600'}`}>{routeInfo.transitDetails.arrivalTime || t('transit_end')}</span>
+                        </div>
+                      </div>
+                    </div>
+                    {routeInfo.transitDetails.alternatives && routeInfo.transitDetails.alternatives.length > 0 && (
+                      <div className={`mt-3 pt-3 border-t ${theme === 'dark' ? 'border-slate-700' : 'border-slate-100'}`}>
+                        <div className="text-[8px] uppercase font-black tracking-widest opacity-40 mb-2">{t('transit_other_times')}</div>
+                        <div className="flex flex-col gap-1.5">
+                          {routeInfo.transitDetails.alternatives.map((alt, aidx) => (
+                            <div key={aidx} className="flex items-center justify-between text-[10px] font-bold">
+                              <span>🚌 {alt.departureTime}</span>
+                              <span className="opacity-40 tracking-tighter">→ {alt.arrivalTime}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
-            </>
+            </div>
           ) : (
             <span className="opacity-40">{t('transit_no_route')}</span>
           )}
@@ -285,16 +391,16 @@ export const TimelineNode = ({
       <div
         ref={setNodeRef}
         style={style}
-        className={`flex-1 min-w-0 ml-4 p-4 rounded-2xl border backdrop-blur-md transition-all ${
+        className={`flex-1 min-w-0 ml-2 sm:ml-4 p-3 sm:p-4 rounded-2xl border backdrop-blur-md transition-all ${
           isDragging ? 'opacity-50 scale-105 z-50 bg-white/20 border-emerald-500 shadow-2xl' : 
           poi.category === 'Special' ? 'bg-indigo-50 dark:bg-indigo-950/20 border-indigo-200 dark:border-indigo-500/30' :
           'bg-white dark:bg-white/5 border-slate-100 dark:border-white/5 hover:bg-white/50 dark:hover:bg-white/10 hover:border-emerald-500/30 shadow-sm hover:shadow-xl'
         }`}
       >
-        <div className="flex gap-4 items-center">
+        <div className="flex gap-2 sm:gap-4 items-center">
           <button
             {...attributes} {...listeners}
-            className={`self-center p-1.5 rounded-lg transition-colors cursor-grab active:cursor-grabbing shrink-0 border ${
+            className={`hidden xs:flex self-center p-1.5 rounded-lg transition-colors cursor-grab active:cursor-grabbing shrink-0 border ${
               theme === 'dark' 
                 ? 'bg-white/5 border-white/5 text-white/30 hover:bg-white/20 hover:text-white' 
                 : 'bg-slate-50 border-slate-200 text-slate-400 hover:bg-slate-100 hover:text-slate-600'
@@ -307,29 +413,29 @@ export const TimelineNode = ({
           {poi.imageUrl && (
             <img 
               src={poi.imageUrl} 
-              className="w-12 h-12 rounded-xl object-cover shadow-lg border border-slate-200 dark:border-white/10 shrink-0" 
+              className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl object-cover shadow-lg border border-slate-200 dark:border-white/10 shrink-0" 
               alt=""
               referrerPolicy="no-referrer"
             />
           )}
 
           <div className="flex-1 min-w-0 flex flex-col justify-center text-left">
-            <h4 className={`font-black truncate text-sm uppercase tracking-tight transition-colors duration-500 ${theme === 'dark' ? 'text-white' : 'text-slate-900'}`}>
+            <h4 className={`font-black truncate text-xs sm:text-sm uppercase tracking-tight transition-colors duration-500 ${theme === 'dark' ? 'text-white' : 'text-slate-900'}`}>
               {translate(poi.title, lang)}
             </h4>
             {(poi.description) && (
-              <p className={`text-[10px] truncate mt-0.5 ${theme === 'dark' ? 'text-white/40' : 'text-slate-500'}`}>
+              <p className={`text-[8px] sm:text-[10px] truncate mt-0.5 ${theme === 'dark' ? 'text-white/40' : 'text-slate-500'}`}>
                 {translate(poi.description, lang)}
               </p>
             )}
-            <div className="flex items-center gap-3 mt-1">
-              <p className={`text-[9px] uppercase tracking-widest flex items-center gap-1.5 font-black ${theme === 'dark' ? 'text-slate-500' : 'text-slate-600'}`}>
+            <div className="flex items-center gap-1.5 sm:gap-3 mt-1 overflow-hidden">
+              <p className={`text-[8px] sm:text-[9px] uppercase tracking-widest flex items-center gap-1 sm:gap-1.5 font-black shrink-0 ${theme === 'dark' ? 'text-slate-500' : 'text-slate-600'}`}>
                 {poi.time && <span className="text-emerald-500">{poi.time}</span>}
                 {poi.time && <span className="opacity-20">•</span>}
                 {formatDuration(poi.duration)}
               </p>
               {poi.rating && (
-                <div className="flex items-center gap-0.5 text-[9px] text-amber-500 font-black">
+                <div className="hidden xs:flex items-center gap-0.5 text-[8px] sm:text-[9px] text-amber-500 font-black shrink-0">
                   <Sparkles className="w-2.5 h-2.5" />
                   {poi.rating}
                 </div>
@@ -340,7 +446,7 @@ export const TimelineNode = ({
                 
                 if (isFree) {
                   return (
-                    <div className={`px-1.5 py-0.5 rounded-md text-[9px] font-black border ${theme === 'dark' ? 'bg-green-500/10 border-green-500/20 text-green-400' : 'bg-green-50 border-green-100 text-green-700'}`}>
+                    <div className={`px-1.5 py-0.5 rounded-md text-[8px] sm:text-[9px] font-black border shrink-0 ${theme === 'dark' ? 'bg-green-500/10 border-green-500/20 text-green-400' : 'bg-green-50 border-green-100 text-green-700'}`}>
                       {t('poi_free')}
                     </div>
                   );
@@ -348,7 +454,7 @@ export const TimelineNode = ({
                 
                 if (formatted) {
                   return (
-                    <div className={`px-1.5 py-0.5 rounded-md text-[9px] font-black border ${theme === 'dark' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-emerald-50 border-emerald-100 text-emerald-700'}`}>
+                    <div className={`px-1.5 py-0.5 rounded-md text-[8px] sm:text-[9px] font-black border shrink-0 ${theme === 'dark' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-emerald-50 border-emerald-100 text-emerald-700'}`}>
                       {formatted}
                     </div>
                   );
@@ -357,7 +463,7 @@ export const TimelineNode = ({
                 // Show hint for activities/sightseeing if no price yet
                 if (poi.category === 'Sightseeing' || poi.category === 'Activity') {
                   return (
-                    <div className={`px-1.5 py-0.5 rounded-md text-[9px] font-black border border-dashed ${theme === 'dark' ? 'border-white/10 text-white/20' : 'border-slate-200 text-slate-400'}`}>
+                    <div className={`hidden sm:block px-1.5 py-0.5 rounded-md text-[8px] sm:text-[9px] font-black border border-dashed shrink-0 ${theme === 'dark' ? 'border-white/10 text-white/20' : 'border-slate-200 text-slate-400'}`}>
                       {t('poi_entrance_fees_hint')}
                     </div>
                   );
@@ -367,28 +473,31 @@ export const TimelineNode = ({
               })()}
             </div>
           </div>
-          <button
-            onPointerDown={e => { e.stopPropagation(); onRemove(); }}
-            className={`self-center p-2 rounded-xl transition-all text-xs border flex items-center gap-1 shrink-0 shadow-sm ${
-              theme === 'dark'
-                ? 'bg-rose-500/10 border-rose-500/20 hover:bg-rose-500/20 text-rose-400'
-                : 'bg-rose-50 border-rose-100 hover:bg-rose-100 text-rose-500'
-            }`}
-            title={t('timeline_remove')}
-          >
-            <Trash2 className="w-4 h-4" />
-          </button>
-          <button
-            onPointerDown={e => { e.stopPropagation(); onSelect(poi); }}
-            className={`self-center p-2 rounded-xl transition-all text-xs border flex items-center gap-1 shrink-0 shadow-sm ${
-              theme === 'dark'
-                ? 'bg-white/5 border-white/5 text-white/40 hover:bg-white/20 hover:text-white'
-                : 'bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-200 hover:text-slate-900'
-            }`}
-            title={t('timeline_view_details')}
-          >
-             <ChevronRight className="w-4 h-4" />
-          </button>
+
+          <div className="flex items-center gap-1 shrink-0">
+            <button
+              onPointerDown={e => { e.stopPropagation(); onRemove(); }}
+              className={`p-2 rounded-xl transition-all text-xs border flex items-center justify-center shrink-0 shadow-sm ${
+                theme === 'dark'
+                  ? 'bg-rose-500/10 border-rose-500/20 hover:bg-rose-500/20 text-rose-400'
+                  : 'bg-rose-50 border-rose-100 hover:bg-rose-100 text-rose-500'
+              }`}
+              title={t('timeline_remove')}
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+            <button
+              onPointerDown={e => { e.stopPropagation(); onSelect(poi); }}
+              className={`p-2 rounded-xl transition-all text-xs border flex items-center justify-center shrink-0 shadow-sm ${
+                theme === 'dark'
+                  ? 'bg-white/5 border-white/5 text-white/40 hover:bg-white/20 hover:text-white'
+                  : 'bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-200 hover:text-slate-900'
+              }`}
+              title={t('timeline_view_details')}
+            >
+               <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -514,28 +623,53 @@ export const VerticalTimelineDay = ({
             </p>
           </div>
         ) : (
-          items.map((poi, idx) => (
-            <React.Fragment key={poi.id}>
-              <TimelineNode 
-                poi={poi} 
-                lang={lang} 
-                onRemove={() => onRemove(poi.id)} 
-                onSelect={onSelect}
-                theme={theme as any}
-                currency={currency}
-                rates={rates}
-              />
-              {idx < items.length - 1 && (
-                <TransitNode 
-                  prev={poi} 
-                  next={items[idx + 1]} 
-                  onModeChange={(mode) => onModeChange(items[idx + 1].id, mode)}
-                  theme={theme as any}
-                  lang={lang}
-                />
-              )}
-            </React.Fragment>
-          ))
+          (() => {
+            let currentMinutes = 9 * 60; // Start at 9:00 AM
+            return items.map((poi, idx) => {
+              if (poi.time) {
+                const [h, m] = poi.time.split(':').map(Number);
+                currentMinutes = h * 60 + m;
+              }
+              currentMinutes += poi.duration; // POI finished
+              
+              const departureDate = new Date(date);
+              departureDate.setHours(Math.floor(currentMinutes / 60), currentMinutes % 60, 0, 0);
+
+              const element = (
+                <React.Fragment key={poi.id}>
+                  <TimelineNode 
+                    poi={poi} 
+                    lang={lang} 
+                    onRemove={() => onRemove(poi.id)} 
+                    onSelect={onSelect}
+                    theme={theme as any}
+                    currency={currency}
+                    rates={rates}
+                  />
+                  {idx < items.length - 1 && (
+                    <TransitNode 
+                      prev={poi} 
+                      next={items[idx + 1]} 
+                      onModeChange={(mode) => onModeChange(items[idx + 1].id, mode)}
+                      theme={theme as any}
+                      lang={lang}
+                      departureDate={departureDate}
+                    />
+                  )}
+                </React.Fragment>
+              );
+
+              // Add transit duration to our rolling clock
+              const mode = items[idx + 1]?.transportModeTo || 'car';
+              const cacheKey = getCacheKey(poi, items[idx + 1] || poi, mode, lang);
+              const cached = directionsCache[cacheKey];
+              if (idx < items.length - 1 && cached && cached !== 'pending' && cached !== 'failed') {
+                currentMinutes += (cached as CachedDirection).durationMins;
+              }
+
+              return element;
+            });
+          })()
         )}
       </div>
     </div>

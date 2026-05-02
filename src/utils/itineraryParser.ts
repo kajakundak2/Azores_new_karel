@@ -539,9 +539,13 @@ Format required:
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: prompt,
-      config: { temperature: 0.2 },
+      model: 'gemini-3.1-flash-lite-preview',
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      config: { 
+        systemInstruction: 'You are a precise travel data assistant. Output ONLY valid JSON.',
+        temperature: 0.2,
+        responseMimeType: 'application/json'
+      },
     });
     
     let text = response.text || '';

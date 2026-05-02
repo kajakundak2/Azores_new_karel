@@ -290,7 +290,7 @@ export function LandingPage({ trips, onCreateTrip, onSelectTrip, onDeleteTrip, l
                     </div>
                 </div>
                 <div>
-                    <h1 className={`text-6xl md:text-8xl uppercase tracking-tighter leading-[0.85] ${theme === 'dark' ? 'text-white' : 'text-slate-900'}`}>
+                    <h1 className={`text-4xl sm:text-6xl md:text-8xl uppercase tracking-tighter leading-[0.85] ${theme === 'dark' ? 'text-white' : 'text-slate-900'}`}>
                         <span className="font-extrabold">SARA</span><span className="font-light text-emerald-500">{t('itinerary')}</span>
                     </h1>
                     <p className={`mt-8 font-bold tracking-[0.3em] text-[10px] uppercase ${theme === 'dark' ? 'text-emerald-500/60' : 'text-emerald-600/80'}`}>
@@ -353,7 +353,7 @@ export function LandingPage({ trips, onCreateTrip, onSelectTrip, onDeleteTrip, l
                                     value={destination}
                                     onChange={(e) => setDestination(e.target.value)}
                                     placeholder={t('landing_destination_placeholder')}
-                                    className={`bg-transparent border-none text-2xl font-black focus:ring-0 w-full p-0 flex text-left ${theme === 'dark' ? 'text-white placeholder-white/10' : 'text-slate-900 placeholder-slate-400'}`}
+                                    className={`bg-transparent border-none text-xl sm:text-2xl font-black focus:ring-0 w-full p-0 flex text-left ${theme === 'dark' ? 'text-white placeholder-white/10' : 'text-slate-900 placeholder-slate-400'}`}
                                 />
                             </div>
                         </div>
@@ -362,10 +362,10 @@ export function LandingPage({ trips, onCreateTrip, onSelectTrip, onDeleteTrip, l
                             <label className={`block text-[10px] font-black uppercase tracking-widest mb-3 ml-1 text-left ${theme === 'dark' ? 'text-white/30' : 'text-slate-500'}`}>{t('landing_timeframe_label')}</label>
                             <div className="flex items-center gap-4">
                                 <Calendar className="text-emerald-500 h-6 w-6" />
-                                <div className="flex items-center gap-2 flex-1">
-                                    <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className={`bg-transparent border-none text-sm font-black focus:ring-0 w-full p-0 text-left ${theme === 'light' ? 'text-slate-900' : 'text-white'}`} style={{ colorScheme: theme }} />
+                                <div className="flex items-center gap-2 flex-1 min-w-0">
+                                    <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className={`bg-transparent border-none text-[10px] sm:text-sm font-black focus:ring-0 w-full p-0 text-left ${theme === 'light' ? 'text-slate-900' : 'text-white'}`} style={{ colorScheme: theme }} />
                                     <span className="text-slate-300 dark:text-white/20">→</span>
-                                    <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className={`bg-transparent border-none text-sm font-black focus:ring-0 w-full p-0 text-right ${theme === 'light' ? 'text-slate-900' : 'text-white'}`} style={{ colorScheme: theme }} />
+                                    <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className={`bg-transparent border-none text-[10px] sm:text-sm font-black focus:ring-0 w-full p-0 text-right ${theme === 'light' ? 'text-slate-900' : 'text-white'}`} style={{ colorScheme: theme }} />
                                 </div>
                             </div>
                         </div>
@@ -488,11 +488,7 @@ export function LandingPage({ trips, onCreateTrip, onSelectTrip, onDeleteTrip, l
                 <TreasureHuntGame
                   isOpen={showTreasureHunt}
                   onClose={() => setShowTreasureHunt(false)}
-                  onComplete={() => setTreasureHuntComplete(true)}
-                  destination={destination || t('mystery_destination')}
-                  theme={theme}
-                  lang={lang}
-                  apiKey={geminiKeyManager.getNextKey()}
+                  language={lang as 'en' | 'cs'}
                 />
 
                 {/* Launch Matrix */}

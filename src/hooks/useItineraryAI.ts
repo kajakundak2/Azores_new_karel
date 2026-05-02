@@ -5,7 +5,8 @@ import { GoogleGenAI } from '@google/genai';
 import { ensureBilingual, ensureBilingualAsync, translate, stripCodeFences } from '../utils/bilingualUtils';
 import { applyItineraryUpdate } from '../utils/aiUpdateAgent';
 import { parseItineraryDocument, generateItineraryFromScratch } from '../utils/itineraryParser';
-import { toLocalIso } from '../useItineraryState';
+import { toLocalIso, getFullTripContext, parseDateString } from '../useItineraryState';
+import { getToolDeclarations, SARA_CAPABILITIES_PROMPT, SARA_IDENTITY_PROMPT } from '../utils/saraTools';
 
 interface UseItineraryAIProps {
   activeTrip: any;
@@ -21,6 +22,20 @@ interface UseItineraryAIProps {
   t: (key: string) => string;
   setNotification: (msg: string | null) => void;
   searchPlacesAsync: (query: string) => Promise<POI[]>;
+  // New atomic mutation functions
+  movePoi?: (from: string, to: string, id: string) => Promise<void>;
+  modifyPoi?: (day: string, id: string, changes: Partial<POI>) => Promise<void>;
+  reorderPois?: (day: string, ids: string[]) => Promise<void>;
+  addStay?: (stay: any) => Promise<void>;
+  removeStay?: (id: string) => Promise<void>;
+  modifyStay?: (id: string, changes: any) => Promise<void>;
+  addFlight?: (flight: any) => Promise<void>;
+  removeFlight?: (id: string) => Promise<void>;
+  addDay?: () => Promise<void>;
+  removeDay?: (dayIso: string) => Promise<void>;
+  setDayTheme?: (dayIso: string, theme: string) => Promise<void>;
+  addToLibrary?: (poi: POI) => Promise<void>;
+  removeFromLibrary?: (id: string) => Promise<void>;
 }
 
 export function useItineraryAI({
@@ -36,7 +51,20 @@ export function useItineraryAI({
   lang,
   t,
   setNotification,
-  searchPlacesAsync
+  searchPlacesAsync,
+  movePoi,
+  modifyPoi,
+  reorderPois,
+  addStay,
+  removeStay,
+  modifyStay,
+  addFlight,
+  removeFlight,
+  addDay,
+  removeDay,
+  setDayTheme,
+  addToLibrary,
+  removeFromLibrary
 }: UseItineraryAIProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
@@ -50,33 +78,8 @@ export function useItineraryAI({
    */
   const generatePromptContext = useCallback(() => {
     if (!activeTrip) return "No active trip.";
-    
-    // Attempt to get context from hook
-    const itinerarySummary = getJsonContext?.() || "{}";
-    const referenceDocs = activeTrip.referenceDocs?.map((d: any) => `- ${d.name}: ${d.content.substring(0, 5000)}...`).join('\n') || "None";
-    
-    const travelerProfiles = activeTrip.travelerProfiles?.map((p: any) => `- ${p.name} (${p.gender}, ${p.age}y)`).join('\n') || "None";
-    
-    return `
-=== IMPORTANT: MANUAL TRIP DETAILS (PRIORITY) ===
-- TRIP TITLE: ${activeTrip.title || 'Mission'}
-- DESTINATION: ${activeTrip.destination}
-- DATES: ${activeTrip.startDate} to ${activeTrip.endDate} (ISO format)
-- PARTICIPANTS: ${activeTrip.travelers} people (${activeTrip.adults || activeTrip.travelers} adults, ${activeTrip.kids || 0} kids)
-${activeTrip.kidsAges ? `- KIDS AGES: ${activeTrip.kidsAges.join(', ')}` : ''}
-${activeTrip.preferences ? `- PREFERENCES: ${activeTrip.preferences}` : ''}
-
-=== TRAVELER PROFILES ===
-${travelerProfiles}
-
-=== REFERENCE DOCUMENTS UPLOADED ===
-${referenceDocs}
-
-=== CURRENT ITINERARY STATE (JSON) ===
-${itinerarySummary}
-================================================
-`;
-  }, [activeTrip, getJsonContext]);
+    return getFullTripContext(activeTrip, itinerary) + '\n' + SARA_CAPABILITIES_PROMPT;
+  }, [activeTrip, itinerary]);
 
   const handleSmartGeneration = useCallback(async (intensityValue: string = 'balanced', targetDayNumbers?: number[]) => {
     if (!activeTrip) return;
@@ -233,6 +236,129 @@ ${activeTrip.originalRequest ? `USER INITIAL REQUEST: ${activeTrip.originalReque
     setIsChatLoading(false);
   }, [activeTrip, lang, addPoi, setNotification, t, clearDay, searchPlacesAsync]);
 
+  // Unified tool call handler for both text chat and voice chat
+  const handleToolCall = useCallback(async (name: string, args: any) => {
+    if (!activeTrip) throw new Error("No active trip");
+    
+    let replyText: BilingualString = { en: 'Executing...', cs: 'Provádím...' };
+    let uiCards: POI[] | undefined;
+    
+    const dayNumToIso = (dayNum: number) => {
+      const d = parseDateString(activeTrip.startDate);
+      d.setDate(d.getDate() + (dayNum - 1));
+      return toLocalIso(d);
+    };
+
+    if (name === 'searchGooglePlaces') {
+      const places = await searchPlacesAsync(args.query);
+      if (places.length > 0) {
+        replyText = { en: `I found ${places.length} results:`, cs: `Našla jsem ${places.length} výsledků:` };
+        uiCards = places.slice(0, 5);
+      } else {
+        replyText = { en: `No results found for ${args.query}.`, cs: `Žádné výsledky pro ${args.query}.` };
+      }
+    } else if (name === 'remove_from_itinerary') {
+      const dayIso = dayNumToIso(args.day);
+      const dayPois = itinerary[dayIso] || [];
+      const target = dayPois.find(p => (typeof p.title === 'string' ? p.title : p.title.en).toLowerCase().includes(args.activity.toLowerCase()));
+      if (target) removePoi(dayIso, target.id);
+      replyText = { en: 'Removed.', cs: 'Odstraněno.' };
+    } else if (name === 'trigger_smart_itinerary_generation') {
+      handleSmartGeneration(args.intensity || 'balanced', args.dayNumbers);
+      replyText = { en: 'Smart generation started.', cs: 'Chytré generování spuštěno.' };
+    } else if (name === 'clear_day') {
+      await clearDay(dayNumToIso(args.day));
+      replyText = { en: `Day ${args.day} cleared.`, cs: `Den ${args.day} vyčištěn.` };
+    } else if (name === 'clear_itinerary') {
+      await clearItinerary();
+      replyText = { en: 'The entire itinerary has been cleared.', cs: 'Celý itinerář byl vymazán.' };
+    } else if (name === 'update_itinerary') {
+      // NOTE: handleItineraryUpdate modifies state asynchronously and takes text input
+      // It's used when the tool itself wants the agent to run the AI bulk update
+      if (args.request) {
+         handleItineraryUpdate(args.request);
+      }
+      replyText = { en: 'Bulk update applied.', cs: 'Hromadná aktualizace použita.' };
+    } else if (name === 'update_trip_details') {
+      if (activeTripId) { const { ...details } = args; await updateTrip(activeTripId, details); }
+      replyText = { en: 'Trip details updated.', cs: 'Detaily výletu aktualizovány.' };
+    } else if (name === 'modify_poi') {
+      const dayIso = dayNumToIso(args.day);
+      const dayPois = itinerary[dayIso] || [];
+      const target = dayPois.find(p => (typeof p.title === 'string' ? p.title : p.title.en).toLowerCase().includes(args.poiTitle.toLowerCase()));
+      if (target && modifyPoi) await modifyPoi(dayIso, target.id, args.changes || {});
+      replyText = { en: `Updated "${args.poiTitle}".`, cs: `Upraveno "${args.poiTitle}".` };
+    } else if (name === 'move_poi') {
+      const fromIso = dayNumToIso(args.fromDay);
+      const toIso = dayNumToIso(args.toDay);
+      const dayPois = itinerary[fromIso] || [];
+      const target = dayPois.find(p => (typeof p.title === 'string' ? p.title : p.title.en).toLowerCase().includes(args.poiTitle.toLowerCase()));
+      if (target && movePoi) await movePoi(fromIso, toIso, target.id);
+      replyText = { en: `Moved to Day ${args.toDay}.`, cs: `Přesunuto na den ${args.toDay}.` };
+    } else if (name === 'reorder_day') {
+      const dayIso = dayNumToIso(args.day);
+      const dayPois = itinerary[dayIso] || [];
+      const orderedIds = (args.orderedTitles || []).map((t: string) => {
+        const p = dayPois.find(p => (typeof p.title === 'string' ? p.title : p.title.en).toLowerCase().includes(t.toLowerCase()));
+        return p?.id;
+      }).filter(Boolean);
+      if (reorderPois) await reorderPois(dayIso, orderedIds);
+      replyText = { en: `Day ${args.day} reordered.`, cs: `Den ${args.day} přeuspořádán.` };
+    } else if (name === 'add_stay') {
+      if (addStay) await addStay(args);
+      replyText = { en: `Added stay: ${args.name}.`, cs: `Přidáno ubytování: ${args.name}.` };
+    } else if (name === 'remove_stay') {
+      const stays = activeTrip.logistics?.stays || [];
+      const s = stays.find((s: any) => s.name.toLowerCase().includes(args.stayName.toLowerCase()));
+      if (s && removeStay) await removeStay(s.id);
+      replyText = { en: 'Stay removed.', cs: 'Ubytování odstraněno.' };
+    } else if (name === 'modify_stay') {
+      const stays = activeTrip.logistics?.stays || [];
+      const s = stays.find((s: any) => s.name.toLowerCase().includes(args.stayName.toLowerCase()));
+      if (s && modifyStay) await modifyStay(s.id, args.changes || {});
+      replyText = { en: 'Stay updated.', cs: 'Ubytování aktualizováno.' };
+    } else if (name === 'add_flight') {
+      if (addFlight) await addFlight(args);
+      replyText = { en: `Flight added: ${args.departureAirport} → ${args.arrivalAirport}.`, cs: `Let přidán: ${args.departureAirport} → ${args.arrivalAirport}.` };
+    } else if (name === 'remove_flight') {
+      const flights = activeTrip.logistics?.flights || [];
+      const f = flights.find((f: any) => f.direction === args.direction && (!args.airline || f.airline.toLowerCase().includes(args.airline.toLowerCase())));
+      if (f && removeFlight) await removeFlight(f.id);
+      replyText = { en: 'Flight removed.', cs: 'Let odstraněn.' };
+    } else if (name === 'add_day') {
+      if (addDay) await addDay();
+      replyText = { en: 'Added one more day to the trip!', cs: 'Přidán další den výletu!' };
+    } else if (name === 'remove_day') {
+      if (removeDay) await removeDay(dayNumToIso(args.day));
+      replyText = { en: `Day ${args.day} removed.`, cs: `Den ${args.day} odstraněn.` };
+    } else if (name === 'set_day_theme') {
+      if (setDayTheme) await setDayTheme(dayNumToIso(args.day), args.theme);
+      replyText = { en: `Day ${args.day} theme: "${args.theme}".`, cs: `Téma dne ${args.day}: "${args.theme}".` };
+    } else if (name === 'add_to_library') {
+      const places = await searchPlacesAsync(args.query);
+      if (places.length > 0 && addToLibrary) { await addToLibrary(places[0]); uiCards = [places[0]]; }
+      replyText = { en: 'Saved to library.', cs: 'Uloženo do knihovny.' };
+    } else if (name === 'remove_from_library') {
+      const lib = activeTrip.libraryPois || [];
+      const item = lib.find((p: any) => (typeof p.title === 'string' ? p.title : p.title.en).toLowerCase().includes(args.title.toLowerCase()));
+      if (item && removeFromLibrary) await removeFromLibrary(item.id);
+      replyText = { en: 'Removed from library.', cs: 'Odstraněno z knihovny.' };
+    } else if (name === 'set_traveler_profiles') {
+      if (activeTripId) {
+        const profiles = (args.travelers || []).map((t: any, i: number) => ({ ...t, id: `tp-${i}-${Date.now()}` }));
+        await updateTrip(activeTripId, { travelerProfiles: profiles, travelers: profiles.length });
+      }
+      replyText = { en: `Updated ${args.travelers?.length || 0} traveler profiles.`, cs: `Aktualizováno ${args.travelers?.length || 0} profilů cestujících.` };
+    } else if (name === 'set_packing_requirements') {
+      if (activeTripId) await updateTrip(activeTripId, { 'logistics.packingRequirements': args.requirements });
+      replyText = { en: 'Packing requirements updated.', cs: 'Požadavky na balení aktualizovány.' };
+    }
+    
+    return { message: replyText.en, replyText, uiCards };
+  }, [
+    activeTrip, activeTripId, itinerary, searchPlacesAsync, removePoi, handleSmartGeneration, clearDay, clearItinerary, updateTrip, modifyPoi, movePoi, reorderPois, addStay, removeStay, modifyStay, addFlight, removeFlight, addDay, removeDay, setDayTheme, addToLibrary, removeFromLibrary
+  ]);
+
   const handleItineraryUpdate = useCallback(async (request: string) => {
     if (!activeTrip || !activeTripId) return;
     setIsChatLoading(true);
@@ -289,21 +415,16 @@ ${activeTrip.originalRequest ? `USER INITIAL REQUEST: ${activeTrip.originalReque
         const activeModel = chatModels[(modelRotationRef.current + retryCount) % chatModels.length];
         const itineraryContext = generatePromptContext();
         
-        const systemInstruction = `You are "Sára," an intelligent travel assistant helping with the trip "${tripTitle}" to ${dest}.
-        
-        ${itineraryContext}
-        
-        - CORE KNOWLEDGE: You have access to the full itinerary and ALL uploaded reference documents above. Use them!
-        - VISUAL PRIORITY: Suggest visually stunning spots and viral viewpoints perfect for memories.
-        - Always use searchGooglePlaces for real recommendations.
-        - All costs in €.
-        - SMART PLANNING: 
-           - If the user asks for a WHOLE NEW trip, call trigger_smart_itinerary_generation.
-           - If the user asks for COMPLEX CHANGES, call update_itinerary.
-        
-        RESPONSE FORMAT: You MUST respond in BOTH English and Czech in every reply.
-        Format your reply as JSON: {"en": "your English reply", "cs": "your Czech reply"}
-        ALWAYS respond in this JSON format. Never respond in plain text.`;
+        const systemInstruction = `${SARA_IDENTITY_PROMPT}
+
+You are helping with the trip "${tripTitle}" to ${dest}.
+
+${itineraryContext}
+
+All costs in €. Use searchGooglePlaces for real recommendations.
+RESPONSE FORMAT: You MUST respond in BOTH English and Czech in every reply.
+Format your reply as JSON: {"en": "your English reply", "cs": "your Czech reply"}
+ALWAYS respond in this JSON format. Never respond in plain text.`;
 
         const contents = messages
           .map(m => ({ 
@@ -315,141 +436,28 @@ ${activeTrip.originalRequest ? `USER INITIAL REQUEST: ${activeTrip.originalReque
         const result = await ai.models.generateContent({
           model: activeModel,
           contents,
-          // removed: responseMimeType — not forcing JSON to allow function calls
           config: {
             systemInstruction,
             tools: [{
-              functionDeclarations: [
-                {
-                  name: 'searchGooglePlaces',
-                  description: `Search for a real point of interest near ${dest}.`,
-                  parameters: {
-                    type: 'OBJECT',
-                    properties: { query: { type: 'STRING' } },
-                    required: ['query']
-                  } as any
-                },
-                {
-                  name: 'generateFullItinerary',
-                  description: `Generate a full day itinerary for a specific day.`,
-                  parameters: {
-                    type: 'OBJECT',
-                    properties: { 
-                      dayDescription: { type: 'STRING' },
-                      numPlaces: { type: 'NUMBER' }
-                    },
-                    required: ['dayDescription']
-                  } as any
-                },
-                {
-                  name: 'remove_from_itinerary',
-                  description: `Remove a specific activity.`,
-                  parameters: {
-                    type: 'OBJECT',
-                    properties: {
-                      dayIso: { type: 'STRING' },
-                      poiId: { type: 'STRING' }
-                    },
-                    required: ['dayIso', 'poiId']
-                  } as any
-                },
-                {
-                  name: 'trigger_smart_itinerary_generation',
-                  description: 'Generate or Re-generate a complete detailed day-by-day itinerary.',
-                  parameters: {
-                    type: 'OBJECT',
-                    properties: {
-                      intensity: { type: 'STRING', enum: ['relaxed', 'balanced', 'packed'] },
-                      dayNumbers: { type: 'ARRAY', items: { type: 'NUMBER' } }
-                    }
-                  } as any
-                },
-                {
-                  name: 'clear_day',
-                  description: 'Clear all activities from a specific day.',
-                  parameters: {
-                    type: 'OBJECT',
-                    properties: { dayIso: { type: 'STRING' } },
-                    required: ['dayIso']
-                  } as any
-                },
-                {
-                  name: 'update_itinerary',
-                  description: 'Update or replan large portions.',
-                  parameters: {
-                    type: 'OBJECT',
-                    properties: { request: { type: 'STRING' } },
-                    required: ['request']
-                  } as any
-                },
-                {
-                  name: 'clear_itinerary',
-                  description: 'Clear the entire itinerary for all days.',
-                  parameters: { type: 'OBJECT', properties: {} }
-                }
-              ]
+              functionDeclarations: getToolDeclarations(dest) as any
             }]
           }
         });
 
         if (result.functionCalls && result.functionCalls.length > 0) {
           const fc = result.functionCalls[0];
-          let replyText: BilingualString = { en: 'Searching...', cs: 'Hledám...' };
-          let uiCards: POI[] | undefined;
+          const args = (fc.args || {}) as any;
+          const { replyText, uiCards } = await handleToolCall(fc.name, args);
 
-          if (fc.name === 'searchGooglePlaces') {
-            const query = (fc.args as any).query;
-            const places = await searchPlacesAsync(query);
-            if (places.length > 0) {
-              replyText = { en: `I found ${places.length} results:`, cs: `Našla jsem ${places.length} výsledků:` };
-              uiCards = places.slice(0, 5);
-            }
-          } else if (fc.name === 'generateFullItinerary') {
-            const desc = (fc.args as any).dayDescription;
-            const num = (fc.args as any).numPlaces || 4;
-            const places = await searchPlacesAsync(`${desc} in ${dest}`);
-            if (places.length > 0) {
-              replyText = { en: `Here's a ${desc} plan:`, cs: `Tady je plán pro ${desc}:` };
-              uiCards = places.slice(0, num);
-            }
-          } else if (fc.name === 'remove_from_itinerary') {
-            const { dayIso, poiId } = fc.args as any;
-            removePoi(dayIso, poiId);
-            replyText = { en: 'Removed.', cs: 'Odstraněno.' };
-          } else if (fc.name === 'trigger_smart_itinerary_generation') {
-            const intensity = (fc.args as any)?.intensity || 'balanced';
-            const dayNumbers = (fc.args as any)?.dayNumbers as number[] | undefined;
-            handleSmartGeneration(intensity, dayNumbers);
-            return;
-          } else if (fc.name === 'clear_day') {
-            const { dayIso } = fc.args as any;
-            await clearDay(dayIso);
-            replyText = { en: 'Cleared.', cs: 'Vyčištěno.' };
-          } else if (fc.name === 'clear_itinerary') {
-            await clearItinerary();
-            replyText = { en: 'The entire itinerary has been cleared.', cs: 'Celý itinerář byl vymazán.' };
-          } else if (fc.name === 'update_itinerary') {
-            const { request } = fc.args as any;
-            handleItineraryUpdate(request);
-            return;
-          }
-
-          // SPEED: No translation call needed — hardcoded bilingual responses
           setMessages(prev => [...prev, { role: 'model', text: replyText, uiCards }]);
         } else {
-          // SPEED: Parse bilingual JSON from model instead of translating
           const rawReply = result.text ?? '{"en": "How can I help?", "cs": "Jak vám mohu pomoci?"}';
           let bilingualReply: BilingualString;
           try {
             const cleaned = stripCodeFences(rawReply);
             const parsed = JSON.parse(cleaned);
-            if (parsed.en && parsed.cs) {
-              bilingualReply = parsed as BilingualString;
-            } else {
-              bilingualReply = { en: rawReply, cs: rawReply };
-            }
+            bilingualReply = (parsed.en && parsed.cs) ? parsed as BilingualString : { en: rawReply, cs: rawReply };
           } catch {
-            // Model didn't return JSON — use raw text for both languages
             bilingualReply = { en: rawReply, cs: rawReply };
           }
           setMessages(prev => [...prev, { role: 'model', text: bilingualReply }]);
@@ -539,6 +547,7 @@ ${activeTrip.originalRequest ? `USER INITIAL REQUEST: ${activeTrip.originalReque
     handleSmartGeneration,
     handleItineraryUpdate,
     handleFileUpload,
+    handleToolCall,
     generatePromptContext
   };
 }

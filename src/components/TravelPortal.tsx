@@ -103,7 +103,8 @@ export const TravelPortal: React.FC<TravelPortalProps> = ({
     handleSendMessage,
     handleSmartGeneration,
     handleFileUpload,
-    generatePromptContext
+    generatePromptContext,
+    handleToolCall
   } = useItineraryAI({
     activeTrip,
     activeTripId,
@@ -159,66 +160,15 @@ export const TravelPortal: React.FC<TravelPortalProps> = ({
         return [...prev, { role: 'user', text: { en: text, cs: text } }];
       });
     },
-    onUpdateItinerary: async (data: any) => {
-      if (!activeTrip) return;
-
-      // Handle voice-triggered itinerary generation launch
-      if (data.type === 'launch_itinerary') {
-        const mode = data.planningMode === 'dense' ? 'packed' : (data.planningMode || 'balanced');
-        return handleSmartGeneration(mode);
-      }
-
-      if (!data.day || !data.activity) return; // Guard for incomplete data
-
-      const startAt = new Date(activeTrip.startDate);
-      startAt.setDate(startAt.getDate() + (data.day - 1));
-      const dayIso = toLocalIso(startAt);
-      
-      const bActivity = await ensureBilingualAsync(data.activity);
-      const bDescription = data.description ? await ensureBilingualAsync(data.description) : { en: 'Added by Sára.', cs: 'Přidáno Sárou.' };
-      
-      let newActivity: POI = {
-        id: 'voice-' + Date.now(),
-        title: bActivity,
-        description: bDescription,
-        category: (data.category as Category) || 'Sightseeing',
-        duration: 60,
-        imageUrl: `https://images.unsplash.com/photo-1540206351-d6465b3ac5c1?auto=format&fit=crop&w=800&q=80`,
-        address: data.activity,
-      };
-      
-      try {
-        const results = await searchPlacesAsync(`${data.activity} ${activeTrip.destination}`);
-        if (results.length > 0) newActivity = { ...newActivity, ...results[0], id: 'voice-' + Date.now() + '-' + results[0].id };
-      } catch {}
-      
-      addPoi(dayIso, newActivity);
-      setNotification(`${t('sara_added_notification')} ${data.day}`);
-    },
-    onRemoveFromItinerary: async (data) => {
-      if (!activeTrip || !data.day || !data.activity) return;
-      const startAt = new Date(activeTrip.startDate);
-      startAt.setDate(startAt.getDate() + (data.day - 1));
-      const dayIso = toLocalIso(startAt);
-      const dayPois = itinerary[dayIso] || [];
-      const target = dayPois.find(p => p.title.en.toLowerCase().includes(data.activity.toLowerCase())) || dayPois[dayPois.length-1];
-      if (target) {
-        removePoi(dayIso, target.id);
-        setNotification(`${t('sara_removed_notification')} ${data.day}`);
-      }
-    },
-    onClearDay: async (data) => {
-      if (data.day) {
-        const startAt = new Date(activeTrip!.startDate);
-        startAt.setDate(startAt.getDate() + (data.day - 1));
-        clearDay(toLocalIso(startAt));
-      }
-    },
-    onClearItinerary: async () => clearItinerary(),
-    onUpdateTripDetails: async (data) => { if (activeTripId) updateTrip(activeTripId, data); },
-    onTriggerSmartItinerary: async (intensity, dayNumbers) => handleSmartGeneration(intensity, dayNumbers),
     onShowUICard: (card) => setMessages(prev => [...prev, { role: 'model', text: { en: 'Here is what I found:', cs: 'Tady je, co jsem našla:' }, uiCards: [card] }]),
-    onUploadDoc: (f) => handleFileUpload(f, addReferenceDoc)
+    onUploadDoc: (f) => handleFileUpload(f, addReferenceDoc),
+    onToolCall: async (name, args) => {
+      const result = await handleToolCall(name, args);
+      if (result.uiCards) {
+        setMessages(prev => [...prev, { role: 'model', text: result.replyText, uiCards: result.uiCards }]);
+      }
+      return result;
+    }
   });
 
   const saraState = useSaraState({
