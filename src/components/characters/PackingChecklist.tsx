@@ -282,7 +282,7 @@ Return ONLY a JSON array: [{"text":"...","category":"..."}]
 Generate 18-25 practical items.`;
 
         const result = await ai.models.generateContent({
-          model: 'gemini-3.1-flash-lite-preview',
+          model: 'gemini-flash-lite-latest',
           contents: [{ role: 'user', parts: [{ text: prompt }] }],
         });
 

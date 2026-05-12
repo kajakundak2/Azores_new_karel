@@ -19,7 +19,7 @@ class AITranslator {
       try {
         const ai = new GoogleGenAI({ apiKey });
         const result = await ai.models.generateContent({
-          model: 'gemini-3.1-flash-lite-preview',
+          model: 'gemini-flash-lite-latest',
           contents: [{ role: 'user', parts: [{ text: `Translate to English (en) and Czech (cs). Return ONLY JSON {"en":"...","cs":"..."}: "${text}"` }] }],
           config: {
             temperature: 0.1,
@@ -84,7 +84,7 @@ class AITranslator {
         const ai = new GoogleGenAI({ apiKey });
         const numberedList = uncachedTexts.map((t, i) => `${i + 1}. "${t}"`).join('\n');
         const result = await ai.models.generateContent({
-          model: 'gemini-3.1-flash-lite-preview',
+          model: 'gemini-flash-lite-latest',
           contents: [{ role: 'user', parts: [{ text: `Translate each text to English (en) and Czech (cs). Return ONLY a JSON array of objects [{"en":"...","cs":"..."},...].\n\nTexts:\n${numberedList}` }] }],
           config: {
             temperature: 0.1,

@@ -41,6 +41,7 @@ export interface ChatMessage {
   text: string | BilingualString;
   uiCards?: POI[];
   isStreaming?: boolean;
+  isFinal?: boolean;
   timestamp?: string;
 }
 

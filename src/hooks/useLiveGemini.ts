@@ -15,10 +15,11 @@ interface UseLiveGeminiProps {
   onUploadDoc?: (file: File) => void;
   onRemoteVolumeChange?: (volume: number) => void;
   onVolumeChange?: (volume: number) => void;
-  onStatusChange?: (status: 'idle' | 'connecting' | 'connected' | 'error') => void;
+  onStatusChange?: (status: 'idle' | 'connecting' | 'connected' | 'error', message?: string) => void;
   onShowUICard?: (card: any) => void;
   onMessage?: (text: string) => void;
   onUserMessage?: (text: string, isFinal?: boolean) => void;
+  onCallInterrupt?: () => void;
   systemInstruction?: string;
   lang?: string;
   destination?: string;
@@ -43,6 +44,7 @@ export function useLiveGemini({
   onShowUICard, 
   onMessage, 
   onUserMessage, 
+  onCallInterrupt,
   systemInstruction,
   lang = 'en',
   destination = ''
@@ -51,6 +53,8 @@ export function useLiveGemini({
   const isActiveRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const reconnectCountRef = useRef(0);
+  const maxReconnects = 3;
 
   // Callbacks refs to avoid stale closures in long-running WebSocket
   const callbacksRef = useRef({
@@ -67,7 +71,8 @@ export function useLiveGemini({
     onRemoteVolumeChange,
     onVolumeChange,
     onMessage,
-    onUserMessage
+    onUserMessage,
+    onCallInterrupt
   });
 
   useEffect(() => {
@@ -85,7 +90,8 @@ export function useLiveGemini({
       onRemoteVolumeChange,
       onVolumeChange,
       onMessage,
-      onUserMessage
+      onUserMessage,
+      onCallInterrupt
     };
   }, [
     onUpdateItinerary, 
@@ -94,13 +100,15 @@ export function useLiveGemini({
     onClearDay, 
     onClearItinerary, 
     onTriggerSmartItinerary, 
+    onToolCall,
     onUploadDoc, 
     onShowUICard, 
     onStatusChange, 
     onRemoteVolumeChange, 
     onVolumeChange, 
     onMessage, 
-    onUserMessage
+    onUserMessage,
+    onCallInterrupt
   ]);
 
   // Keep ref in sync
@@ -108,18 +116,71 @@ export function useLiveGemini({
     isActiveRef.current = isActive;
   }, [isActive]);
 
-  // Removing session_update useEffect as it is not supported/needed in mid-call for v1beta Bidi
-  // and was causing "Unknown name session_update" errors.
-
   const audioContextRef = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const processorRef = useRef<ScriptProcessorNode | null>(null);
+  const processorRef = useRef<AudioWorkletNode | null>(null);
+  const systemInstructionRef = useRef(systemInstruction);
+  const isStartingRef = useRef(false);
+  const isMountedRef = useRef(true);
+
+  // Keep isMountedRef in sync
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  // Keep systemInstructionRef in sync
+  useEffect(() => {
+    systemInstructionRef.current = systemInstruction;
+  }, [systemInstruction]);
+
   // Queue and scheduler for audio playback
   const nextStartTimeRef = useRef(0);
   const activeSourcesRef = useRef<AudioBufferSourceNode[]>([]);
   const isPlayingRef = useRef(false);
   const remoteAnalyserRef = useRef<AnalyserNode | null>(null);
   const animationFrameRef = useRef<number | null>(null);
+  const sessionHandleRef = useRef<string | null>(null);
+  const messageBufferRef = useRef<{ index: number, payload: any }[]>([]);
+  const nextMessageIndexRef = useRef(1);
+  const lastConsumedIndexRef = useRef(0);
+  const isResumingRef = useRef(false);
+  const setupCompleteRef = useRef(false);
+  const lastLocalVolumeUpdateRef = useRef<number>(0);
+
+  // Unified send function that handles indexing and buffering for transparent resumption
+  const sendToWS = useCallback((payload: any, skipBuffer: boolean = false) => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      console.warn('Gemini Live: [SEND_FAIL] WebSocket is not open. State:', wsRef.current?.readyState, 'Payload:', payload);
+      return;
+    }
+
+    if (skipBuffer) {
+      // realtimeInput chunks are too large and frequent to log fully
+      if (!payload.realtimeInput) {
+        console.log('Gemini Live: [SEND_UNBUFFERED]', payload);
+      }
+      try {
+        wsRef.current.send(JSON.stringify(payload));
+      } catch (err) {
+        console.error('Gemini Live: [SEND_ERR] Unbuffered send failed:', err);
+      }
+      return;
+    }
+
+    const nextIndex = nextMessageIndexRef.current;
+    messageBufferRef.current.push({ index: nextIndex, payload });
+    nextMessageIndexRef.current++;
+
+    console.log('Gemini Live: [SEND_BUFFERED] Index:', nextIndex, payload);
+    try {
+      wsRef.current.send(JSON.stringify(payload));
+    } catch (err) {
+      console.error('Gemini Live: [SEND_ERR] Buffered send failed:', err);
+    }
+  }, []);
 
   const stopAllAudio = useCallback(() => {
     activeSourcesRef.current.forEach(source => {
@@ -137,13 +198,17 @@ export function useLiveGemini({
 
   const stopCall = useCallback(() => {
     setIsActive(false);
-    onStatusChange?.('idle');
+    isActiveRef.current = false;
+    callbacksRef.current.onStatusChange?.('idle');
     stopAllAudio();
 
     if (wsRef.current) {
-      wsRef.current.close();
+      if (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING) {
+        wsRef.current.close();
+      }
       wsRef.current = null;
     }
+    
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current);
       animationFrameRef.current = null;
@@ -155,15 +220,35 @@ export function useLiveGemini({
     }
 
     if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current.getTracks().forEach(track => {
+        try {
+          track.stop();
+        } catch (e) {
+          // Track might already be stopped
+        }
+      });
       streamRef.current = null;
     }
 
     if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-      audioContextRef.current.close();
+      try {
+        audioContextRef.current.close();
+      } catch (e) {
+        console.warn('Error closing audio context:', e);
+      }
       audioContextRef.current = null;
     }
-  }, [onStatusChange, stopAllAudio]);
+
+    // Reset session handle only on explicit manual stop or fatal error
+    if (!wsRef.current || wsRef.current.readyState === WebSocket.CLOSED) {
+       console.log('Gemini Live: [CLEANUP] Clearing session state.');
+       sessionHandleRef.current = null; 
+       messageBufferRef.current = [];
+       nextMessageIndexRef.current = 1;
+       lastConsumedIndexRef.current = 0;
+       setupCompleteRef.current = false;
+    }
+  }, [stopAllAudio]);
 
   // Handle unmount
   useEffect(() => {
@@ -172,14 +257,18 @@ export function useLiveGemini({
         stopCall();
       }
     };
-  }, [stopCall]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /**
    * Play raw PCM audio data (24kHz, 16-bit, LE) by converting to Float32 AudioBuffer.
    */
   const playPCMAudio = useCallback((base64Audio: string) => {
     const ctx = audioContextRef.current;
-    if (!ctx || ctx.state === 'closed') return;
+    if (!ctx || ctx.state === 'closed') {
+      console.warn('Cannot play audio: context is closed or missing');
+      return;
+    }
 
     try {
       // Decode base64 to raw bytes
@@ -219,8 +308,8 @@ export function useLiveGemini({
       // Scheduling logic
       const now = ctx.currentTime;
       if (nextStartTimeRef.current < now) {
-        // Small padding to avoid click/pop on first chunk
-        nextStartTimeRef.current = now + 0.05;
+        // Reduced padding for lower latency (from 0.05 to 0.01)
+        nextStartTimeRef.current = now + 0.01;
       }
 
       const startTime = nextStartTimeRef.current;
@@ -240,24 +329,78 @@ export function useLiveGemini({
     }
   }, []);
 
-  const startCall = useCallback(async () => {
+  const startCall = useCallback(async (isManual: boolean = false) => {
+    if (isManual) reconnectCountRef.current = 0;
+    if (!isMountedRef.current || isActiveRef.current || isStartingRef.current) return;
+
     if (geminiKeyManager.isServiceDown()) {
       setError('Gemini AI is currently under heavy load (503). Please try again in 5-10 minutes.');
-      onStatusChange?.('error');
+      callbacksRef.current.onStatusChange?.('error');
       return;
     }
 
     const apiKey = geminiKeyManager.getNextKey();
     if (!apiKey) {
       setError('No API keys available or service is cooling down.');
-      onStatusChange?.('error');
+      callbacksRef.current.onStatusChange?.('error');
       return;
     }
 
     try {
       setError(null);
+      isStartingRef.current = true;
       setIsActive(true);
-      onStatusChange?.('connecting');
+      isActiveRef.current = true;
+      callbacksRef.current.onStatusChange?.('connecting');
+
+      // 1. Initialize Audio Context
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ 
+        sampleRate: 16000,
+        latencyHint: 'interactive'
+      });
+      audioContextRef.current = audioContext;
+
+      console.log('AudioContext initialized. State:', audioContext.state);
+
+      // Guard: Ensure context is not closed immediately
+      if (audioContext.state === 'closed') {
+        throw new Error('AudioContext was closed unexpectedly during initialization. Check browser permissions.');
+      }
+
+      // 2. Ensure AudioContext is running BEFORE loading modules or creating nodes
+      // Browsers often start context as 'suspended' until a user gesture (which startCall is).
+      if (audioContext.state === 'suspended') {
+        console.log('Resuming AudioContext early...');
+        await audioContext.resume();
+        // Polling wait for 'running' state if resume() didn't resolve it immediately
+        let retries = 10;
+        while (audioContext.state !== 'running' && retries > 0) {
+          await new Promise(resolve => setTimeout(resolve, 50));
+          retries--;
+        }
+        console.log('AudioContext state after early resume:', audioContext.state);
+      }
+
+      // 3. Load the Audio Worklet Module
+      try {
+        if (!audioContext.audioWorklet) {
+          throw new Error('AudioWorklet is not supported in this browser or context.');
+        }
+
+        console.log('Loading AudioWorklet module...');
+        // Using a cache-busting or absolute path if necessary, but '/pcm-processor.worklet.js' is usually fine
+        await audioContext.audioWorklet.addModule('/pcm-processor.worklet.js');
+        console.log('AudioWorklet module loaded.');
+      } catch (e: any) {
+        console.error('Worklet module addition failed:', e);
+        throw new Error(`Could not load audio processor: ${e.message || 'Unknown error'}`);
+      }
+
+      // Re-check if still active after async addModule
+      if (!isMountedRef.current || !isActiveRef.current || audioContext.state === 'closed') {
+        if (audioContext.state !== 'closed') await audioContext.close();
+        return;
+      }
 
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -268,19 +411,25 @@ export function useLiveGemini({
           autoGainControl: true
         }
       });
+
+      // Re-check if still active after async getUserMedia
+      if (!isMountedRef.current || !isActiveRef.current || audioContext.state === 'closed') {
+        stream.getTracks().forEach(track => track.stop());
+        if (audioContext.state !== 'closed') await audioContext.close();
+        return;
+      }
       streamRef.current = stream;
 
-      // 1. Initialize Audio Context (16kHz for input)
-      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
-      if (audioContext.state === 'suspended') {
+      // Ensure context is STILL running after getUserMedia (which might have taken time)
+      if (audioContext.state !== 'running') {
+        console.log('Resuming AudioContext again...');
         await audioContext.resume();
       }
-      audioContextRef.current = audioContext;
 
       // Create Analyser for remote volume (sync)
       const remoteAnalyser = audioContext.createAnalyser();
       remoteAnalyser.fftSize = 256;
-      remoteAnalyser.smoothingTimeConstant = 0.5; // Smoother transitions
+      remoteAnalyser.smoothingTimeConstant = 0.5;
       remoteAnalyser.connect(audioContext.destination);
       remoteAnalyserRef.current = remoteAnalyser;
 
@@ -289,21 +438,16 @@ export function useLiveGemini({
       let smoothedVolume = 0;
       
       const analyzeVolume = () => {
-        if (!remoteAnalyserRef.current) return;
+        if (!remoteAnalyserRef.current || audioContext.state === 'closed') return;
         remoteAnalyser.getFloatTimeDomainData(volumeData);
         
-        // Calculate RMS volume
         let sum = 0;
         for (let i = 0; i < volumeData.length; i++) {
           sum += volumeData[i] * volumeData[i];
         }
         const rms = Math.sqrt(sum / volumeData.length);
-        
-        // Exponential smoothing (Low-pass filter)
-        // Adjust 0.3 to change how "fast" she responds. Higher = snappier, Lower = smoother.
         smoothedVolume = smoothedVolume * 0.85 + rms * 0.15;
         
-        // Only report if above noise floor and significantly different from 0
         const noiseFloor = 0.005;
         const finalVol = smoothedVolume > noiseFloor ? smoothedVolume : 0;
         if (finalVol > 0 || smoothedVolume > 0.01) {
@@ -315,36 +459,67 @@ export function useLiveGemini({
       
       analyzeVolume();
 
+      // Final safety check before creating AudioWorkletNode
+      if (!isMountedRef.current || audioContext.state === 'closed' || !isActiveRef.current) {
+        stream.getTracks().forEach(track => track.stop());
+        if (audioContext.state !== 'closed') await audioContext.close();
+        return;
+      }
+
       const source = audioContext.createMediaStreamSource(stream);
-      
-      // Migration to AudioWorklet (removes ScriptProcessorNode deprecation)
-      await audioContext.audioWorklet.addModule('/pcm-processor.worklet.js');
-      const workletNode = new AudioWorkletNode(audioContext, 'pcm-processor');
-      processorRef.current = workletNode;
+
+      let workletNode: AudioWorkletNode;
+      try {
+        console.log('Creating AudioWorkletNode... Final state check:', audioContext.state);
+        
+        // Final attempt to ensure it's running
+        if (audioContext.state !== 'running') {
+          await audioContext.resume();
+        }
+
+        if (audioContext.state !== 'running') {
+           throw new Error(`Audio engine could not be started (Current state: ${audioContext.state}).`);
+        }
+
+        workletNode = new AudioWorkletNode(audioContext, 'pcm-processor', {
+          numberOfInputs: 1,
+          numberOfOutputs: 1,
+          outputChannelCount: [1]
+        });
+        processorRef.current = workletNode;
+        console.log('AudioWorkletNode created successfully.');
+      } catch (e: any) {
+        console.error('Failed to create AudioWorkletNode:', e);
+        throw new Error(`Audio engine could not be initialized: ${e.message || 'Unknown error'}`);
+      }
+
 
       // 2. Initialize WebSocket to Gemini Live API (Use v1beta for 3.1)
       const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${apiKey}`;
+      console.log('Gemini Live: Connecting to WebSocket...', wsUrl.replace(apiKey, apiKey.substring(0, 5) + '...'));
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
       ws.onopen = () => {
-        // Send Setup Message as first message (per AI instructions.md and server error 1007)
-        // Reverting to models/gemini-3.1-flash-live-preview and using snake_case as required by v1beta Bidi
-        const setupMessage = {
+        console.log('Gemini Live: WebSocket opened. Resuming:', !!sessionHandleRef.current);
+        isResumingRef.current = !!sessionHandleRef.current;
+        
+        // Using gemini-3.1-flash-live-preview (no stable GA replacement yet as of May 2026)
+        // IMPORTANT: Raw WebSocket protocol requires camelCase field names
+        const setupMessage: any = {
           setup: {
             model: "models/gemini-3.1-flash-live-preview",
-            generation_config: {
-              response_modalities: ["AUDIO"],
-              speech_config: {
-                voice_config: { 
-                  prebuilt_voice_config: { voice_name: "Aoede" } 
+            generationConfig: { 
+              responseModalities: ["AUDIO"],
+              speechConfig: {
+                voiceConfig: { 
+                  prebuiltVoiceConfig: { voiceName: "Aoede" } 
                 }
               }
             },
-            // thinking_config: { thinking_level: 'minimal' }, // From AI instructions.md
-            system_instruction: {
+            systemInstruction: {
               parts: [{
-                text: systemInstruction || 'You are "Sara," a knowledgeable and friendly travel planning assistant.'
+                text: systemInstructionRef.current || 'You are "Sara," a knowledgeable and friendly travel planning assistant.'
               }]
             },
             tools: [{
@@ -352,13 +527,22 @@ export function useLiveGemini({
             }]
           }
         };
-        ws.send(JSON.stringify(setupMessage));
 
-        // Wait for setup complete before streaming audio
-        // The first server message after setup is the setupComplete confirmation
+        // Handle session resumption if we have a handle
+        if (sessionHandleRef.current) {
+          console.log('Gemini Live: [SESSION_RESUME] Attempting resumption with handle:', sessionHandleRef.current);
+          setupMessage.setup.sessionResumption = {
+            handle: sessionHandleRef.current
+          };
+        }
+
+        console.log('Gemini Live: [SEND_SETUP] Sending setup message:', JSON.stringify(setupMessage, null, 2));
+        try {
+          ws.send(JSON.stringify(setupMessage));
+        } catch (err) {
+          console.error('Gemini Live: [SETUP_ERR] Failed to send setup:', err);
+        }
       };
-
-      let setupComplete = false;
 
       ws.onmessage = async (event) => {
         try {
@@ -368,17 +552,90 @@ export function useLiveGemini({
           } else if (event.data instanceof Blob) {
             messageText = await event.data.text();
           } else {
+            console.warn('Gemini Live: [MSG] Received unknown data type:', typeof event.data);
             return;
           }
 
           const response = JSON.parse(messageText);
+          
+          // Enhanced Logging for Debugging
+          if (response.setupComplete || response.setup_complete) {
+            console.log('Gemini Live: [RECV] Setup Complete:', response.setupComplete || response.setup_complete);
+          } else if (response.serverContent || response.server_content) {
+            const content = response.serverContent || response.server_content;
+            if (content.modelTurn?.parts?.some((p: any) => p.inlineData)) {
+               // Audio chunks summary
+               console.log('Gemini Live: [RECV] Audio chunk received');
+            } else {
+               console.log('Gemini Live: [RECV] Server Content:', content);
+            }
+          } else if (response.toolCall || response.tool_call) {
+            console.log('Gemini Live: [RECV] Tool Call:', response.toolCall || response.tool_call);
+          } else if (response.sessionResumptionUpdate || response.session_resumption_update) {
+            console.log('Gemini Live: [RECV] Session Resumption Update:', response.sessionResumptionUpdate || response.session_resumption_update);
+          } else if (response.inputTranscription || response.input_transcription) {
+            console.log('Gemini Live: [RECV] Input Transcription:', response.inputTranscription || response.input_transcription);
+          } else if (response.outputTranscription || response.output_transcription) {
+            console.log('Gemini Live: [RECV] Output Transcription:', response.outputTranscription || response.output_transcription);
+          } else {
+            console.log('Gemini Live: [RECV] Other message:', response);
+          }
+
           const isSetupComplete = response.setupComplete || response.setup_complete;
           const serverContent = response.serverContent || response.server_content;
           const toolCall = response.toolCall || response.tool_call;
+          const sessionResUpdate = response.sessionResumptionUpdate || response.session_resumption_update;
+          const goAway = response.goAway || response.go_away;
+
+          if (goAway) {
+            console.log('Gemini Live: Received go_away. Reconnecting proactively...');
+            // Proactive reconnect: close will trigger the onclose logic which has reconnect
+            ws.close(4000, "Proactive Reconnect");
+            return;
+          }
+
+          if (sessionResUpdate) {
+            console.log('Gemini Live: [SESSION_RES_UPDATE] Received update:', sessionResUpdate);
+            // The API might return token in various fields depending on version/snake/camel
+            const newToken = sessionResUpdate.token || 
+                            sessionResUpdate.sessionResumptionToken || 
+                            sessionResUpdate.session_resumption_token || 
+                            sessionResUpdate.newHandle || 
+                            sessionResUpdate.new_handle;
+            
+            if (newToken) {
+              console.log('Gemini Live: [SESSION_RES_UPDATE] Saving new handle:', newToken);
+              sessionHandleRef.current = newToken;
+            }
+
+            const lastConsumed = sessionResUpdate.lastConsumedClientMessageIndex ?? 
+                               sessionResUpdate.last_consumed_client_message_index;
+            
+            if (lastConsumed !== undefined) {
+              console.log('Gemini Live: [SESSION_RES_UPDATE] Server consumed up to index:', lastConsumed);
+              lastConsumedIndexRef.current = lastConsumed;
+              // Prune buffer of messages server has already seen
+              const beforePrune = messageBufferRef.current.length;
+              messageBufferRef.current = messageBufferRef.current.filter(m => m.index > lastConsumed);
+              console.log(`Gemini Live: [SESSION_RES_UPDATE] Pruned buffer: ${beforePrune} -> ${messageBufferRef.current.length} items remaining`);
+            }
+          }
 
           if (isSetupComplete) {
-            setupComplete = true;
-            onStatusChange?.('connected');
+            setupCompleteRef.current = true;
+            console.log('Gemini Live: [STATE] Setup complete, engine ready.');
+            callbacksRef.current.onStatusChange?.('connected');
+            
+            // Replay unconsumed messages if resuming
+            if (isResumingRef.current && messageBufferRef.current.length > 0) {
+              console.log(`Gemini Live: [RESUME_REPLAY] Replaying ${messageBufferRef.current.length} unconsumed messages`);
+              messageBufferRef.current.forEach(msg => {
+                console.log('Gemini Live: [REPLAYING_INDEX]', msg.index);
+                ws.send(JSON.stringify(msg.payload));
+              });
+            }
+            isResumingRef.current = false;
+
             const workletNode = processorRef.current as AudioWorkletNode;
             if (workletNode) {
               source.connect(workletNode);
@@ -389,27 +646,32 @@ export function useLiveGemini({
               silentGain.connect(audioContext.destination);
 
               workletNode.port.onmessage = (event) => {
-                if (ws.readyState === WebSocket.OPEN && setupComplete) {
+                if (ws.readyState === WebSocket.OPEN && setupCompleteRef.current) {
                   const inputData = event.data as Float32Array;
                   const pcmData = AudioProcessor.toPCM16(inputData);
                   const base64Audio = AudioProcessor.arrayBufferToBase64(pcmData.buffer);
 
-                  ws.send(JSON.stringify({
-                    realtime_input: {
+                  sendToWS({
+                    realtimeInput: {
                       audio: {
-                        mime_type: "audio/pcm;rate=16000",
+                        mimeType: "audio/pcm;rate=16000",
                         data: base64Audio
                       }
                     }
-                  }));
+                  }, true);
 
                   let sum = 0;
                   for (let i = 0; i < inputData.length; i++) sum += inputData[i] * inputData[i];
                   const vol = Math.sqrt(sum / inputData.length);
-                  if (vol > 0.05) {
-                    onVolumeChange?.(vol);
-                  } else if (vol < 0.01) {
-                     onVolumeChange?.(0);
+                  const now = Date.now();
+                  if (now - lastLocalVolumeUpdateRef.current > 100) {
+                    if (vol > 0.05) {
+                      callbacksRef.current.onVolumeChange?.(vol);
+                      lastLocalVolumeUpdateRef.current = now;
+                    } else if (vol < 0.01) {
+                      callbacksRef.current.onVolumeChange?.(0);
+                      lastLocalVolumeUpdateRef.current = now;
+                    }
                   }
                 }
               };
@@ -421,6 +683,7 @@ export function useLiveGemini({
           if (serverContent?.interrupted) {
             console.log('Gemini Live: Interrupted by user speech');
             stopAllAudio();
+            callbacksRef.current.onCallInterrupt?.();
           }
 
           // Handle Audio & Text responses
@@ -433,180 +696,178 @@ export function useLiveGemini({
             // 1. Handle Model Audio Response
             if (model_turn?.parts) {
               for (const part of model_turn.parts) {
-                if (part.inlineData?.data || part.inline_data?.data) {
-                  playPCMAudio(part.inlineData?.data || part.inline_data?.data);
+                const inlineData = part.inlineData || part.inline_data;
+                if (inlineData?.data) {
+                  playPCMAudio(inlineData.data);
                 }
                 if (part.text) {
-                  onMessage?.(part.text);
+                  callbacksRef.current.onMessage?.(part.text);
+                }
+                
+                // Handle Function Calls embedded in parts (newer spec)
+                const fCall = part.functionCall || part.function_call;
+                if (fCall) {
+                  console.log('Gemini Live: Found function call in model turn parts:', fCall);
+                  handleFunctionCall(fCall);
                 }
               }
             }
 
             // 2. Handle User Transcription
             if (input_trans) {
-              onUserMessage?.(input_trans.text, input_trans.isFinal || input_trans.is_final);
+              const text = input_trans.text;
+              const isFinal = input_trans.isFinal ?? input_trans.is_final;
+              callbacksRef.current.onUserMessage?.(text, isFinal);
             }
 
             // 3. Handle Model Transcription
             if (output_trans) {
-              onMessage?.(output_trans.text);
+              callbacksRef.current.onMessage?.(output_trans.text);
             }
           }
 
-          // Handle Function Call responses
+          // Handle Top-Level Tool Call responses (legacy/alternative spec)
           const functionCalls = toolCall?.functionCalls || toolCall?.function_calls;
           if (functionCalls) {
             for (const functionCall of functionCalls) {
-              const { name, args, id } = functionCall;
-              console.log('Gemini Live Tool Call:', name, args);
-
-              const sendResponse = (resp: any) => {
-                if (ws.readyState === WebSocket.OPEN) {
-                  ws.send(JSON.stringify({
-                    tool_response: {
-                      function_responses: [{
-                        id,
-                        name,
-                        response: resp
-                      }]
-                    }
-                  }));
-                }
-              };
-
-              // If onToolCall is available, route everything through it (unified tool handling)
-              if (callbacksRef.current.onToolCall) {
-                const processGeneric = async () => {
-                  try {
-                    const result = await callbacksRef.current.onToolCall!(name, args || {});
-                    sendResponse({ success: true, message: result?.message || `Executed ${name}.` });
-                  } catch (err: any) {
-                    sendResponse({ success: false, message: `Failed: ${err.message}` });
-                  }
-                };
-                processGeneric();
-                continue;
-              }
-
-              if (name === 'trigger_smart_itinerary_generation' && args) {
-                const processSmart = async () => {
-                  try {
-                    await callbacksRef.current.onTriggerSmartItinerary?.(args.intensity, args.dayNumbers);
-                    sendResponse({ success: true, message: `Started smart generation with intensity: ${args.intensity || 'balanced'}.` });
-                  } catch (err: any) {
-                    sendResponse({ success: false, message: `Failed: ${err.message}` });
-                  }
-                };
-                processSmart();
-              } else if (name === 'update_itinerary' && args) {
-                const processUpdate = async () => {
-                  try {
-                    // Route to bulk update agent via onToolCall or legacy onUpdateItinerary
-                    if (callbacksRef.current.onToolCall) {
-                      await callbacksRef.current.onToolCall(name, args);
-                    } else {
-                      await callbacksRef.current.onUpdateItinerary?.(args as any);
-                    }
-                    sendResponse({ success: true, message: `Bulk itinerary update applied.` });
-                  } catch (err: any) {
-                    sendResponse({ success: false, message: `Failed: ${err.message}` });
-                  }
-                };
-                processUpdate();
-              } else if (name === 'remove_from_itinerary' && args) {
-                const processRemove = async () => {
-                  try {
-                    await callbacksRef.current.onRemoveFromItinerary?.(args as any);
-                    sendResponse({ success: true, message: `Removed "${args.activity}" from Day ${args.day}` });
-                  } catch (err: any) {
-                    sendResponse({ success: false, message: `Failed to remove: ${err.message}` });
-                  }
-                };
-                processRemove();
-              } else if (name === 'update_trip_details' && args) {
-                const p = async () => {
-                  try {
-                    await callbacksRef.current.onUpdateTripDetails?.(args as any);
-                    sendResponse({ success: true, message: `Updated trip parameters.` });
-                  } catch (err: any) {
-                    sendResponse({ success: false, message: `Failed: ${err.message}` });
-                  }
-                };
-                p();
-              } else if (name === 'clear_day' && args) {
-                const p = async () => {
-                  try {
-                    await callbacksRef.current.onClearDay?.(args as any);
-                    sendResponse({ success: true, message: `Cleared Day ${args.day}` });
-                  } catch (err: any) {
-                    sendResponse({ success: false, message: `Failed: ${err.message}` });
-                  }
-                };
-                p();
-              } else if (name === 'clear_itinerary') {
-                const p = async () => {
-                  try {
-                    await callbacksRef.current.onClearItinerary?.();
-                    sendResponse({ success: true, message: `Cleared entire itinerary.` });
-                  } catch (err: any) {
-                    sendResponse({ success: false, message: `Failed: ${err.message}` });
-                  }
-                };
-                p();
-              } else if (name === 'searchGooglePlaces' && args) {
-                searchPlacesAsync(args.query).then(results => {
-                  if (results.length > 0) callbacksRef.current.onShowUICard?.(results[0]);
-                  sendResponse({ results: results.slice(0, 3) });
-                }).catch(err => sendResponse({ success: false, message: err.message }));
-              } else {
-                // Route all other tools (atomic mutations) through onToolCall
-                const processGeneric = async () => {
-                  try {
-                    const result = await callbacksRef.current.onToolCall?.(name, args || {});
-                    sendResponse({ success: true, message: result?.message || `Executed ${name}.` });
-                  } catch (err: any) {
-                    sendResponse({ success: false, message: `Failed: ${err.message}` });
-                  }
-                };
-                processGeneric();
-              }
+              handleFunctionCall(functionCall);
             }
           }
         } catch (err) {
-          console.warn('WS message parse error:', err);
+          console.warn('Gemini Live: [PARSE_ERROR] WS message parse error:', err);
+        }
+      };
+
+      // Unified Function Call Handler
+      const handleFunctionCall = (functionCall: any) => {
+        const { name, args, id } = functionCall;
+        console.log('Gemini Live Tool Call:', name, args);
+
+        const sendResponse = (resp: any) => {
+          sendToWS({
+            toolResponse: {
+              functionResponses: [{
+                id,
+                name,
+                response: resp
+              }]
+            }
+          });
+        };
+
+        // Notify UI that a tool is being processed
+        callbacksRef.current.onStatusChange?.('connected', `Processing ${name}...`);
+
+        // Route all tools through the unified onToolCall handler if provided
+        if (callbacksRef.current.onToolCall) {
+          const processTool = async () => {
+            try {
+              console.log(`Gemini Live: [TOOL_START] ${name}`, args);
+              const result = await callbacksRef.current.onToolCall!(name, args || {});
+              console.log(`Gemini Live: [TOOL_SUCCESS] ${name} Result:`, result);
+              // Send success response back to the model
+              sendResponse({ 
+                success: true, 
+                message: result?.message || `Executed ${name}.` 
+              });
+              // Clear tool status
+              callbacksRef.current.onStatusChange?.('connected');
+            } catch (err: any) {
+              console.error(`Gemini Live: [TOOL_ERROR] ${name} Failed:`, err);
+              sendResponse({ 
+                success: false, 
+                message: `Failed: ${err.message}` 
+              });
+              callbacksRef.current.onStatusChange?.('connected');
+            }
+          };
+          processTool();
+        } else {
+          // Fallback for standalone usage without TravelPortal/onToolCall
+          console.warn(`Gemini Live: [TOOL_WARN] No onToolCall handler for ${name}. Model will be notified of failure.`);
+          sendResponse({ success: false, message: "Tool execution not implemented in this context." });
         }
       };
 
       ws.onerror = (e) => {
-        console.error('WS Error:', e);
-        geminiKeyManager.markKeyFailed(apiKey, true); // Assume 429 or similar on error for safety
-        setError('Voice connection failed. Check your API key and try again.');
-        onStatusChange?.('error');
+        console.error('Gemini Live: [WS_ERROR] WebSocket Error:', e);
+        geminiKeyManager.markKeyFailed(apiKey, true); 
+        setError('Voice connection failed. Check your API key and console for details.');
+        callbacksRef.current.onStatusChange?.('error');
         stopCall();
       };
 
       ws.onclose = (e) => {
         // Use ref to check active status to avoid stale closure
         if (isActiveRef.current) {
-          console.error('WS closed unexpectedly:', e.code, e.reason);
-          setError(`Call ended. Reason: ${e.reason || 'Server disconnected'} (Code: ${e.code})`);
-          onStatusChange?.('error');
-          stopCall();
+          console.log('Gemini Live: [WS_CLOSED] Code:', e.code, 'Reason:', e.reason || 'No reason provided');
+          
+          // Codes to NOT reconnect: 1000 (normal), 1008 (policy violation/bad key), 400x (manual/proactive)
+          const isFatal = e.code === 1008 || e.code === 4001; 
+          
+          if (!isFatal && reconnectCountRef.current < maxReconnects && e.code !== 1000) {
+            const isProactive = e.code === 4000;
+            console.log(`Gemini Live: [RECONNECTING] ${isProactive ? 'Proactive' : 'Unexpected'} reconnect ${reconnectCountRef.current + 1}/${maxReconnects}...`);
+            
+            if (!isProactive) reconnectCountRef.current++;
+            
+            callbacksRef.current.onStatusChange?.('connecting', isProactive ? 'Refreshing session...' : 'Reconnecting...');
+            
+            setTimeout(() => {
+              if (isActiveRef.current) {
+                console.log('Gemini Live: [RETRY_START] Attempting startCall again.');
+                startCall(false);
+              }
+            }, isProactive ? 100 : 2000);
+          } else {
+            // Fatal or Max Reconnects or Normal Close (1000)
+            if (e.code !== 1000) {
+              console.log('Gemini Live: [FATAL_STOP] Not reconnecting. Code:', e.code);
+              setError(`Call ended. Reason: ${e.reason || 'Server disconnected'} (Code: ${e.code})`);
+              callbacksRef.current.onStatusChange?.('error');
+            } else {
+              console.log('Gemini Live: [NORMAL_STOP] Session closed normally.');
+            }
+            // Clear session state
+            sessionHandleRef.current = null;
+            messageBufferRef.current = [];
+            nextMessageIndexRef.current = 1;
+            setupCompleteRef.current = false;
+            stopCall();
+          }
+        } else {
+          console.log('Gemini Live: [WS_CLOSED_INACTIVE] WebSocket closed while inactive. Code:', e.code);
+          // If already inactive (manual stop), ensure state is cleared if code is final
+          if (e.code === 1000 || e.code === 1008 || e.code === 4001) {
+            sessionHandleRef.current = null;
+            messageBufferRef.current = [];
+            nextMessageIndexRef.current = 1;
+            setupCompleteRef.current = false;
+          }
         }
       };
 
     } catch (err: any) {
       console.error('Call failed:', err);
       setError(err.message || 'Failed to start voice call');
-      onStatusChange?.('error');
+      callbacksRef.current.onStatusChange?.('error');
       stopCall();
+    } finally {
+      isStartingRef.current = false;
     }
-  }, [onUpdateItinerary, onVolumeChange, onRemoteVolumeChange, onStatusChange, stopCall, playPCMAudio, isActive, onShowUICard, systemInstruction, lang]);
+  }, [stopCall, playPCMAudio, destination]);
+
+  // System instruction mid-session handling:
+  // Gemini 3.1 Flash Live does NOT support clientContent with role "system" mid-session.
+  // The SI is set in the setup message. systemInstructionRef is already kept in sync
+  // (line ~136), so the next connection/reconnect will automatically use the latest SI.
+  // No action needed here — avoid reconnecting just for SI changes.
 
   return {
     isActive,
     error,
     startCall,
-    stopCall
+    stopCall,
+    resetReconnection: () => { reconnectCountRef.current = 0; }
   };
 }

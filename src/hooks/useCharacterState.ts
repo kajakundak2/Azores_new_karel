@@ -110,104 +110,104 @@ export function useSaraState({
   isChatLoading,
   isChatOpen,
 }: UseSaraStateProps): SaraStateResult {
-  const [currentState, setCurrentState] = useState<SaraState>('waving');
-  const [animation, setAnimation] = useState<SaraAnimation>('wave');
-  const [speechBubble, setSpeechBubble] = useState<string | null>(null);
-  const lastInteractionRef = useRef(Date.now());
-  const boredTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const bounceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [isBored, setIsBored] = useState(false);
   const lastRemoteTalkRef = useRef(0);
+  const boredTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Reset interaction timer on any state change
-  const resetIdleTimer = useCallback(() => {
-    lastInteractionRef.current = Date.now();
-  }, []);
+  let currentState: SaraState = 'waving';
+  let animation: SaraAnimation = 'wave';
+  let speechBubble: string | null = null;
 
-  // Priority-based state resolution
-  useEffect(() => {
-    resetIdleTimer();
+  const now = Date.now();
 
-    // Clear any pending bounce timeout
-    if (bounceTimeoutRef.current) {
-      clearTimeout(bounceTimeoutRef.current);
-      bounceTimeoutRef.current = null;
-    }
+  // P1: Voice call states (highest priority)
+  if (callStatus === 'connecting') {
+    currentState = 'phone_ringing';
+    animation = 'phone-ring';
+    speechBubble = '📞 Ringing...';
+  } else if (callStatus === 'connected' && isVoiceActive) {
+    const isGeminiTalking = remoteVoiceVolume > 0.01; // Lower threshold for more reactive mouth
+    const isUserTalking = voiceVolume > 0.02;
 
-    // P1: Voice call states (highest priority)
-    if (callStatus === 'connecting') {
-      setCurrentState('phone_ringing');
-      setAnimation('phone-ring');
-      setSpeechBubble('📞 Connecting...');
-      return;
-    }
-
-    if (callStatus === 'connected' && isVoiceActive) {
-      // Determine if she should be talking or listening
-      // We prioritize Gemini's voice (remoteVolume) for lip-sync
-      const isGeminiTalking = remoteVoiceVolume > 0.05;
-      const isUserTalking = voiceVolume > 0.05;
-
-      if (isGeminiTalking) {
-        lastRemoteTalkRef.current = Date.now();
-        // Lip-sync based on remote volume
-        if (remoteVoiceVolume > 0.15) {
-          setCurrentState('talking_open');
-        } else if (remoteVoiceVolume > 0.1) {
-          setCurrentState('talking_slightly_open');
-        } else {
-          setCurrentState('talking_closed');
-        }
-        setAnimation('breathe');
-        setSpeechBubble(null);
-      } else if (isUserTalking && (Date.now() - lastRemoteTalkRef.current > 500)) {
-        // User is talking, she is listening attentively
-        setCurrentState('phone_excited');
-        setAnimation('bounce');
-        setSpeechBubble(null);
+    if (isGeminiTalking) {
+      lastRemoteTalkRef.current = now;
+      // Lip-sync based on remote volume
+      if (remoteVoiceVolume > 0.12) {
+        currentState = 'talking_open';
+      } else if (remoteVoiceVolume > 0.05) {
+        currentState = 'talking_slightly_open';
       } else {
-        // Silence
-        setCurrentState('phone_listening');
-        setAnimation('idle');
-        setSpeechBubble(null);
+        currentState = 'talking_closed';
       }
-      return;
+      animation = 'breathe';
+      speechBubble = null;
+    } else if (isUserTalking && (now - lastRemoteTalkRef.current > 400)) {
+      // User is talking, she is listening attentively
+      currentState = 'phone_excited';
+      animation = 'bounce';
+      speechBubble = '👂 Listening...';
+    } else if (isChatLoading) {
+      // This covers the gap when a tool is running or she is 'thinking'
+      currentState = 'thinking';
+      animation = 'float';
+      speechBubble = '🤔 Thinking...';
+    } else {
+      // Silence / Idle on phone
+      currentState = 'phone_listening';
+      animation = 'idle';
+      speechBubble = null;
     }
-
-    // P2: Chat states
-    if (isChatLoading) {
-      setCurrentState('typing');
-      setAnimation('idle');
-      setSpeechBubble('✍️ Typing...');
-      return;
+  } 
+  // P2: Chat states
+  else if (isChatLoading) {
+    currentState = 'typing';
+    animation = 'idle';
+    speechBubble = '✍️ Typing...';
+  } 
+  // P3: Default idle state
+  else if (isChatOpen) {
+    currentState = 'thinking';
+    animation = 'idle';
+    speechBubble = null;
+  } 
+  // P4: Default — waving (and potentially bored)
+  else {
+    if (isBored) {
+      currentState = 'bored';
+      animation = 'float';
+      speechBubble = '💤 Click me!';
+    } else {
+      currentState = 'waving';
+      animation = 'wave';
+      speechBubble = null;
     }
+  }
 
-    // P3: Default idle state
-    if (isChatOpen) {
-      setCurrentState('thinking');
-      setAnimation('idle');
-      setSpeechBubble(null);
-      return;
-    }
-
-    // P4: Default — waving
-    setCurrentState('waving');
-    setAnimation('wave');
-    setSpeechBubble(null);
-  }, [callStatus, voiceVolume, remoteVoiceVolume, isVoiceActive, isChatLoading, isChatOpen, resetIdleTimer]);
-
-  // Bored timer: after 15s of 'waving' state, switch to bored
+  // Bored timer management
   useEffect(() => {
     if (currentState === 'waving') {
-      boredTimerRef.current = setTimeout(() => {
-        setCurrentState('bored');
-        setAnimation('float');
-        setSpeechBubble('💤 Click me!');
-      }, 15000);
+      if (!isBored && !boredTimerRef.current) {
+        boredTimerRef.current = setTimeout(() => {
+          setIsBored(true);
+        }, 15000);
+      }
+    } else {
+      if (boredTimerRef.current) {
+        clearTimeout(boredTimerRef.current);
+        boredTimerRef.current = null;
+      }
+      if (isBored && currentState !== 'bored') {
+        setIsBored(false);
+      }
     }
+    
     return () => {
-      if (boredTimerRef.current) clearTimeout(boredTimerRef.current);
+      if (boredTimerRef.current) {
+        clearTimeout(boredTimerRef.current);
+        boredTimerRef.current = null;
+      }
     };
-  }, [currentState]);
+  }, [currentState, isBored]);
 
   const imageSrc = SARA_ASSETS[currentState] || SARA_ASSETS.waving;
 

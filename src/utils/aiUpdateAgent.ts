@@ -5,6 +5,8 @@ import { BilingualString } from './types';
 import { stripCodeFences, ensureBilingual } from './bilingualUtils';
 import { searchPlacesAsync } from '../hooks/usePlacesSearch';
 
+import { toLocalIso, getFullTripContext } from '../useItineraryState';
+
 export interface UpdateResponse {
   updatedItinerary: Record<string, POI[]>;
   summary: BilingualString;
@@ -20,17 +22,19 @@ export interface UpdateResponse {
 export async function applyItineraryUpdate(
   currentItinerary: Record<string, POI[]>,
   updateRequest: string,
-  destination: string,
+  activeTrip: any,
   onProgress?: (msg: string) => void
 ): Promise<UpdateResponse> {
+  const tripContext = getFullTripContext(activeTrip, currentItinerary);
+  
   // Step 1: Analyze which days are affected
   onProgress?.('Analyzing update request...');
   const analysisPrompt = `
-    You are a travel coordinator. Analyze the user request and the current itinerary.
+    You are a travel coordinator. Analyze the user request and the current trip state.
     Identify which days (dates) need to be modified, added, or removed.
     
-    Current Itinerary Summary:
-    ${Object.entries(currentItinerary).map(([date, pois]) => `- ${date}: ${pois.map(p => ensureBilingual(p.title as any).en).join(', ') || 'Empty'}`).join('\n')}
+    TRIP CONTEXT:
+    ${tripContext}
     
     User Request: "${updateRequest}"
     
@@ -53,7 +57,7 @@ export async function applyItineraryUpdate(
     try {
       const ai = new GoogleGenAI({ apiKey });
       const analysisResult = await ai.models.generateContent({
-        model: 'gemini-3.1-flash-lite-preview',
+        model: 'gemini-flash-lite-latest',
         contents: [{ role: 'user', parts: [{ text: analysisPrompt }] }],
         config: { responseMimeType: "application/json" }
       });
@@ -84,7 +88,7 @@ export async function applyItineraryUpdate(
     
     const updatePrompt = `
       You are an expert travel planner. Modify the itinerary for the date: ${date}.
-      Destination: ${destination}
+      Destination: ${activeTrip?.destination?.en || 'the selected destination'}
       
       Current POIs for this day:
       ${JSON.stringify(dayPois, null, 2)}
@@ -96,9 +100,10 @@ export async function applyItineraryUpdate(
       2. If deleting, remove the relevant POIs.
       3. If adding, provide name, description, category, and imageKeyword.
       4. If moving, adjust startTime and duration.
-      5. ALL TEXT MUST BE BILINGUAL { "en": "...", "cs": "..." }.
-      6. Return the FULL list of POIs for this day in logical order.
-      7. Return JSON: { "pois": [...], "daySummary": { "en": "...", "cs": "..." } }
+      5. CRITICAL SCHEDULING: Assign a sequentially increasing 'startTime' (e.g. "09:00", "11:00", "14:30") and 'duration' (in minutes) to EVERY activity. Calculate start times so they account for the previous activity's duration plus transit. NEVER schedule multiple activities at the same time!
+      6. ALL TEXT MUST BE BILINGUAL { "en": "...", "cs": "..." }.
+      7. Return the FULL list of POIs for this day in logical order.
+      8. Return JSON: { "pois": [...], "daySummary": { "en": "...", "cs": "..." } }
     `;
 
     let dayRetry = 0;
@@ -110,7 +115,7 @@ export async function applyItineraryUpdate(
       try {
         const ai = new GoogleGenAI({ apiKey });
         const dayResult = await ai.models.generateContent({
-          model: 'gemini-3.1-flash-lite-preview',
+          model: 'gemini-flash-lite-latest',
           contents: [{ role: 'user', parts: [{ text: updatePrompt }] }],
           config: { responseMimeType: "application/json" }
         });
@@ -122,7 +127,7 @@ export async function applyItineraryUpdate(
           const isNew = !dayPois.some(p => p.id === rawPoi.id);
           if (isNew || !rawPoi.location) {
             try {
-              const query = `${ensureBilingual(rawPoi.title).en} ${destination}`;
+              const query = `${ensureBilingual(rawPoi.title).en} ${activeTrip?.destination?.en || ''}`;
               const mapsData = await searchPlacesAsync(query);
               if (mapsData.length > 0) {
                 const bestMatch = mapsData[0];

@@ -99,10 +99,10 @@ JavaScript
 // Sending audio chunk
 ws.send(JSON.stringify({
   realtimeInput: {
-    mediaChunks: [{
+    audio: {
       mimeType: "audio/pcm;rate=16000",
       data: base64AudioChunk
-    }]
+    }
   }
 }));
 

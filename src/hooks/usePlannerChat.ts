@@ -54,7 +54,7 @@ export function usePlannerChat({ onDataExtracted, onReadyToLaunch, systemInstruc
       
       // Models to try in order of complexity/quota
       const modelStack = [
-        'gemini-3.1-flash-lite-preview'
+        'gemini-flash-lite-latest'
       ];
 
       while (!success && retryCount < maxRetries) {

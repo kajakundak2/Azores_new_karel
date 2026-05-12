@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { POI, FIXED_EVENTS, Trip, Stay, Flight } from './data';
 import { db } from './firebase';
 import { doc, onSnapshot, setDoc, getDoc, collection, addDoc, updateDoc, deleteDoc, arrayUnion, arrayRemove } from 'firebase/firestore';
@@ -271,6 +271,7 @@ export function useItineraryState(): TripState {
     const [activeTripId, setActiveTripId] = useState<string | null>(null);
     const [customPois, setCustomPois] = useState<POI[]>([]);
     const [isGeneratingLibrary, setIsGeneratingLibrary] = useState(false);
+    const lastGeneratedDestRef = useRef<string | null>(null);
     
     const tripsCollectionRef = collection(db, 'trips');
     const customPoisDocRef = doc(db, 'custom-pois', 'global');
@@ -319,8 +320,13 @@ export function useItineraryState(): TripState {
         const needsLibrary = !activeTrip.libraryPois || activeTrip.libraryPois.length === 0;
         const needsVideos = !activeTrip.inspirationVideos || activeTrip.inspirationVideos.length === 0;
 
-        if ((needsLibrary || needsVideos) && typeof google !== 'undefined' && google.maps?.places?.Place) {
+        if ((needsLibrary || needsVideos) && 
+            activeTrip.destination !== lastGeneratedDestRef.current &&
+            typeof google !== 'undefined' && 
+            google.maps?.places?.Place) {
+            
             setIsGeneratingLibrary(true);
+            lastGeneratedDestRef.current = activeTrip.destination;
             
             async function generateTripAssets() {
                 try {
@@ -352,8 +358,7 @@ export function useItineraryState(): TripState {
                                 id: v.id,
                                 video: v.video_files.find((f: any) => f.quality === 'hd' || f.width >= 1080)?.link || v.video_files[0].link,
                                 label: v.user.name,
-                                thumbnail: v.image
-                            }));
+                     }));
 
                             // If no videos found, use a fallback quality one
                             if (pexelsVideos.length === 0) {
@@ -615,18 +620,22 @@ export function useItineraryState(): TripState {
     }, [activeTripId, activeTrip, itinerary]);
 
     const modifyPoi = useCallback(async (dayIso: string, poiId: string, changes: Partial<POI>) => {
-        if (!activeTripId || !activeTrip) return;
+        if (!activeTripId || !activeTrip) { console.warn('[modifyPoi] No active trip'); return; }
         const currentItems = itinerary[dayIso] || [];
         const index = currentItems.findIndex(p => p.id === poiId);
-        if (index === -1) return;
+        if (index === -1) { console.warn(`[modifyPoi] POI "${poiId}" not found in ${dayIso} (${currentItems.length} items)`); return; }
 
         const updatedItems = [...currentItems];
+        const before = { time: updatedItems[index].time, duration: updatedItems[index].duration };
         updatedItems[index] = { ...updatedItems[index], ...changes };
+        const after = { time: updatedItems[index].time, duration: updatedItems[index].duration };
+        console.log(`[modifyPoi] ${dayIso}/${poiId}: before=${JSON.stringify(before)} → after=${JSON.stringify(after)}, changes=${JSON.stringify(changes)}`);
 
         const tripRef = doc(db, 'trips', activeTripId);
         await updateDoc(tripRef, {
             [`itinerary.${dayIso}`]: sanitizeForFirestore(updatedItems)
         });
+        console.log(`[modifyPoi] Firestore write succeeded for ${dayIso}`);
     }, [activeTripId, activeTrip, itinerary]);
 
     const reorderPois = useCallback(async (dayIso: string, orderedIds: string[]) => {

@@ -39,11 +39,14 @@ export class AudioProcessor {
    * Base64 encoding for PCM data.
    */
   static arrayBufferToBase64(buffer: ArrayBufferLike): string {
-    let binary = '';
     const bytes = new Uint8Array(buffer);
+    let binary = '';
     const len = bytes.byteLength;
-    for (let i = 0; i < len; i++) {
-      binary += String.fromCharCode(bytes[i]);
+    // Process in chunks to be faster than char-by-char but safer than spread
+    const chunkSize = 8192;
+    for (let i = 0; i < len; i += chunkSize) {
+      const chunk = bytes.subarray(i, i + chunkSize);
+      binary += String.fromCharCode.apply(null, chunk as any);
     }
     return btoa(binary);
   }

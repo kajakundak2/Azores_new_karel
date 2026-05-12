@@ -24,7 +24,20 @@ export default function App() {
     setActiveTripId,
     createTrip,
     updatePoiTransportMode,
-    updatePoi
+    updatePoi,
+    movePoi,
+    modifyPoi,
+    reorderPois,
+    addStay,
+    removeStay,
+    modifyStay,
+    addFlight,
+    removeFlight,
+    addDay,
+    removeDay,
+    setDayTheme,
+    addToLibrary,
+    removeFromLibrary
   } = useItineraryState();
 
   const mapsApiKey = (import.meta as any).env?.VITE_GOOGLE_MAPS_API_KEY || '';
@@ -68,6 +81,19 @@ export default function App() {
         updatePoiTransportMode={updatePoiTransportMode}
         updatePoi={updatePoi}
         addReferenceDoc={addReferenceDoc}
+        movePoi={movePoi}
+        modifyPoi={modifyPoi}
+        reorderPois={reorderPois}
+        addStay={addStay}
+        removeStay={removeStay}
+        modifyStay={modifyStay}
+        addFlight={addFlight}
+        removeFlight={removeFlight}
+        addDay={addDay}
+        removeDay={removeDay}
+        setDayTheme={setDayTheme}
+        addToLibrary={addToLibrary}
+        removeFromLibrary={removeFromLibrary}
         lang={lang}
         setLang={setLang}
         theme={theme}

@@ -87,19 +87,19 @@ function ClassicMarkers({
 }) {
   const map = useMap();
   const markerLib = useMapsLibrary('marker');
-  const markersRef = useRef<Map<string, google.maps.marker.AdvancedMarkerElement>>(new Map());
+  const markersRef = useRef<Map<string, { marker: google.maps.marker.AdvancedMarkerElement; listeners: { type: string; handler: any }[] }>>(new Map());
 
-  // 1. Manage Marker Creation/Deletion
+  // 1. Manage Marker Creation/Deletion/Listeners
   useEffect(() => {
     if (!map || typeof google === 'undefined' || !markerLib) return;
 
     const currentMarkerIds = new Set(markers.map(m => m.poi.id));
 
     // Delete markers that are no longer in the list
-    markersRef.current.forEach((marker, id) => {
+    markersRef.current.forEach(({ marker, listeners }, id) => {
       if (!currentMarkerIds.has(id)) {
+        listeners.forEach(l => marker.removeEventListener(l.type, l.handler));
         marker.map = null;
-        google.maps.event.clearInstanceListeners(marker);
         markersRef.current.delete(id);
       }
     });
@@ -108,9 +108,9 @@ function ClassicMarkers({
     markers.forEach(({ poi, color, label }) => {
       if (!poi.location) return;
 
-      let marker = markersRef.current.get(poi.id);
+      let entry = markersRef.current.get(poi.id);
       
-      if (!marker) {
+      if (!entry) {
         // Create new marker
         const pin = new markerLib.PinElement({
           background: color,
@@ -119,30 +119,54 @@ function ClassicMarkers({
           glyphColor: 'white',
         });
 
-        marker = new markerLib.AdvancedMarkerElement({
+        const marker = new markerLib.AdvancedMarkerElement({
           map,
           position: { lat: poi.location.lat, lng: poi.location.lng },
-          content: pin.element,
+          content: pin.element, 
           title: poi.title.en || poi.title.cs,
         });
 
-        markersRef.current.set(poi.id, marker);
+        entry = { marker, listeners: [] };
+        markersRef.current.set(poi.id, entry);
       }
 
       // Update listeners to use latest POI capture
-      google.maps.event.clearInstanceListeners(marker);
-      marker.addListener('click', () => onMarkerClick(poi));
-      if (onMarkerHover) {
-        marker.addListener('mouseover', () => onMarkerHover(poi));
-        marker.addListener('mouseout', () => onMarkerHover(null));
+      const { marker, listeners } = entry;
+      
+      // Clean up previous listeners from the content element
+      if (marker.content) {
+        listeners.forEach(l => marker.content.removeEventListener(l.type, l.handler));
+      }
+      // Note: gmp-click is a special event on the marker itself
+      marker.removeEventListener('gmp-click', (entry as any)._clickHandler);
+
+      entry.listeners = [];
+
+      const clickHandler = (e: any) => {
+        if (e.stop) e.stop();
+        onMarkerClick(poi);
+      };
+      (entry as any)._clickHandler = clickHandler;
+      marker.addEventListener('gmp-click', clickHandler);
+
+      if (onMarkerHover && marker.content) {
+        const overHandler = () => onMarkerHover(poi);
+        const outHandler = () => onMarkerHover(null);
+        marker.content.addEventListener('mouseenter', overHandler);
+        marker.content.addEventListener('mouseleave', outHandler);
+        entry.listeners.push({ type: 'mouseenter', handler: overHandler });
+        entry.listeners.push({ type: 'mouseleave', handler: outHandler });
       }
     });
 
     return () => {
       // Full cleanup on unmount
-      markersRef.current.forEach(m => {
-        google.maps.event.clearInstanceListeners(m);
-        m.map = null;
+      markersRef.current.forEach(({ marker, listeners }, id) => {
+        if (marker.content) {
+          listeners.forEach(l => marker.content.removeEventListener(l.type, l.handler));
+        }
+        marker.removeEventListener('gmp-click', (markersRef.current.get(id) as any)._clickHandler);
+        marker.map = null;
       });
       markersRef.current.clear();
     };
@@ -153,22 +177,36 @@ function ClassicMarkers({
     if (!map || !markerLib) return;
     
     markers.forEach(({ poi, color, label }) => {
-      const marker = markersRef.current.get(poi.id);
-      if (!marker) return;
+      const entry = markersRef.current.get(poi.id);
+      if (!entry) return;
+      const { marker } = entry;
 
       const isHovered = hoveredId === poi.id;
       
       marker.zIndex = isHovered ? 999 : 1;
       
-      const pin = new markerLib.PinElement({
-        background: isHovered ? '#ffffff' : color,
-        borderColor: isHovered ? color : 'white',
-        glyphText: label || '',
-        glyphColor: isHovered ? color : 'white',
-        scale: isHovered ? (label ? 1.4 : 1.2) : (label ? 1.2 : 0.9),
-      });
-
-      marker.content = pin.element;
+      // Update properties on the existing PinElement instead of creating a new one if possible
+      // However, Vis.gl/SDK often requires re-assignment or specific property updates.
+      // Modern PinElement allows updating properties directly on the element.
+      const pinElement = marker.content as any;
+      // Tag name can be 'GMP-PIN' or 'gmp-pin' depending on browser/version
+      if (pinElement && pinElement.tagName?.toUpperCase() === 'GMP-PIN') {
+        pinElement.background = isHovered ? '#ffffff' : color;
+        pinElement.borderColor = isHovered ? color : 'white';
+        pinElement.glyphText = label || '';
+        pinElement.glyphColor = isHovered ? color : 'white';
+        pinElement.scale = isHovered ? (label ? 1.4 : 1.2) : (label ? 1.2 : 0.9);
+      } else {
+        // Fallback for non-standard content or if the element needs to be recreated
+        const pin = new markerLib.PinElement({
+          background: isHovered ? '#ffffff' : color,
+          borderColor: isHovered ? color : 'white',
+          glyphText: label || '',
+          glyphColor: isHovered ? color : 'white',
+          scale: isHovered ? (label ? 1.4 : 1.2) : (label ? 1.2 : 0.9),
+        });
+        marker.content = pin.element;
+      }
     });
   }, [hoveredId, markers, map, markerLib]);
 
@@ -402,12 +440,12 @@ function MultimodalDirections({
                       if (e.domEvent) e.domEvent.stopPropagation(); // Stops DOM bubbling
                     };
 
-                    marker.addListener('click', (e: any) => {
+                    marker.addEventListener('gmp-click', (e: any) => {
                       preventAndOpen(e);
                       infoWin.open(map, marker);
                     });
 
-                    // Clicking the drawn bus line will ALSO open the schedule without opening Google Maps links
+                    // Clicking the drawn bus line will ALSO open the schedule
                     polyline.addListener('click', (e: any) => {
                       preventAndOpen(e);
                       infoWin.setPosition(e.latLng);
@@ -771,13 +809,12 @@ function GoogleMapInner({
 
   return (
     <>
-
       {/* Day markers */}
       <ClassicMarkers
         markers={activeMarkers}
         onMarkerClick={onMarkerClick}
         hoveredId={hoveredPoiId}
-        onMarkerHover={(poi) => onMarkerHover?.(poi ? poi.id : null)}
+        onMarkerHover={useCallback((poi: POI | null) => onMarkerHover?.(poi ? poi.id : null), [onMarkerHover])}
       />
 
       {/* Browse markers */}
@@ -785,17 +822,17 @@ function GoogleMapInner({
         markers={browseMarkerData}
         onMarkerClick={onMarkerClick}
         hoveredId={hoveredPoiId}
-        onMarkerHover={(poi) => onMarkerHover?.(poi ? poi.id : null)}
+        onMarkerHover={useCallback((poi: POI | null) => onMarkerHover?.(poi ? poi.id : null), [onMarkerHover])}
       />
 
       {/* Search result marker (temporary) */}
       {searchResult && searchResult.location && (
         <ClassicMarkers
-          markers={[{
+          markers={useMemo(() => [{
             poi: searchResult,
             color: '#f59e0b',
             label: '★',
-          }]}
+          }], [searchResult])}
           onMarkerClick={onMarkerClick}
         />
       )}

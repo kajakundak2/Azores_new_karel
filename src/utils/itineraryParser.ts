@@ -74,7 +74,7 @@ Return ONLY valid JSON with this exact structure (no markdown code blocks):
 CRITICAL: The rawText must contain the COMPLETE text for each day. Do NOT summarize or truncate. Every word matters.`;
 
       const result = await ai.models.generateContent({
-        model: 'gemini-3.1-flash-lite-preview',
+        model: 'gemini-flash-lite-latest',
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
         config: {
           systemInstruction: 'You are a precise document parser. Output ONLY valid JSON. Never summarize — preserve all original text.',
@@ -156,7 +156,7 @@ EXTRACTION RULES — READ CAREFULLY:
 2. **NO SUMMARIZATION**: Each POI description must contain ALL original details from the text — opening hours, specific tips, temperature ranges, alternative options, recommendations.
 3. **BILINGUAL**: You MUST provide ALL text fields in BOTH English (en) and Czech (cs). Even if the source text is in only one language, translate it to the other.
 4. **COSTS**: Capture ALL prices mentioned (e.g., "€65", "€1/hour", "€12 per person", "free") into the "cost" field.
-5. **TIMEFRAMES**: Capture specific times (e.g., "between 7:00 and 9:00 AM", "after 4:00 PM", "7:00 AM to 11:00 PM") into the "startTime" field.
+5. **TIMEFRAMES**: Capture specific times into the "startTime" field. If no specific time is mentioned, you MUST assign a sequentially increasing "startTime" in 24h format (e.g. "09:00", "11:00", "14:30") to EVERY activity. Calculate start times so they account for the previous activity's duration plus transit. NEVER schedule multiple activities at the same time!
 6. **PRACTICAL TIPS**: If a tip is specific to a POI (e.g., "Bring water shoes" for a thermal pool), attach it to that POI's "practicalTips" field (bilingual).
 7. **DAY-LEVEL NOTES**: If practical tips apply to the whole day (e.g., "Bring plenty of water for the hike"), include them in the "dayNotes" field (bilingual).
 8. **RESTAURANTS/FOOD**: Every restaurant, café, food truck, or food recommendation is a separate POI with category "Food".
@@ -189,7 +189,7 @@ Return ONLY valid JSON (no markdown code blocks):
 }`;
 
       const result = await ai.models.generateContent({
-        model: 'gemini-3.1-flash-lite-preview',
+        model: 'gemini-flash-lite-latest',
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
         config: {
           systemInstruction: 'You are a meticulous travel data extractor. Output ONLY valid JSON. NEVER summarize — extract every detail verbatim from the source text. No POI count limits.',
@@ -200,6 +200,7 @@ Return ONLY valid JSON (no markdown code blocks):
 
       let text = result.text || '';
       text = stripCodeFences(text);
+      console.log(`[ItineraryParser] RAW Output for Day ${dayChunk.dayNumber}:`, text);
       const parsed = JSON.parse(text.trim());
       
       onProgress?.(`Day ${dayChunk.dayNumber}: Found ${parsed.activities?.length || 0} activities.`);
@@ -308,7 +309,7 @@ Day 1: [Theme]
 ...etc`;
 
       const outlineResult = await ai.models.generateContent({
-        model: 'gemini-3.1-flash-lite-preview',
+        model: 'gemini-flash-lite-latest',
         contents: [{ role: 'user', parts: [{ text: outlinePrompt }] }],
         config: {
           systemInstruction: "You are the trip architect. Draft a logically routed day-by-day plan. Ensure each full day has enough activities according to the pace and 2-3 specific real-world restaurants.",
@@ -367,7 +368,7 @@ REQUIREMENTS:
 - Logically order activities by start time, accounting for transit!
 - MUST output REAL PLACES ONLY with realistic GPS coordinates (lat/lng).
 - Include approximate costs (e.g. "€15", "free").
-- Suggest start times for EVERY activity (e.g. "09:30").
+- CRITICAL SCHEDULING: Provide a sequentially increasing "startTime" (e.g., "09:00", "11:00", "14:30") for EVERY activity. Calculate start times so they account for the previous activity's duration and transit. NEVER schedule multiple activities at the same time!
 - Duration in minutes.
 
 Return ONLY valid JSON:
@@ -392,7 +393,7 @@ Return ONLY valid JSON:
 }`;
 
         const result = await ai.models.generateContent({
-          model: 'gemini-3.1-flash-lite-preview',
+          model: 'gemini-flash-lite-latest',
           contents: [{ role: 'user', parts: [{ text: prompt }] }],
           config: {
             systemInstruction: 'You are an expert trip detailer. Output strictly valid JSON. YOU MUST OUTPUT REAL PLACES ONLY. PLAN SMARTLY.',
@@ -403,6 +404,7 @@ Return ONLY valid JSON:
 
         let text = result.text || '';
         text = stripCodeFences(text);
+        console.log(`[ItineraryParser] RAW Output for generated Day ${dayNum}:`, text);
         dayResult = JSON.parse(text.trim()) as ParsedDay;
         
       } catch (err: any) {
@@ -539,7 +541,7 @@ Format required:
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-3.1-flash-lite-preview',
+      model: 'gemini-flash-lite-latest',
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
       config: { 
         systemInstruction: 'You are a precise travel data assistant. Output ONLY valid JSON.',

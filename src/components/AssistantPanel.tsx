@@ -15,6 +15,7 @@ interface AssistantPanelProps {
   isChatLoading: boolean;
   isVoiceActive: boolean;
   callStatus: string;
+  callStatusMessage?: string | null;
   chatInput: string;
   setChatInput: (val: string) => void;
   handleChatKeyDown: (e: React.KeyboardEvent<HTMLInputElement>) => void;
@@ -42,6 +43,7 @@ export const AssistantPanel: React.FC<AssistantPanelProps> = ({
   isChatLoading,
   isVoiceActive,
   callStatus,
+  callStatusMessage,
   chatInput,
   setChatInput,
   handleChatKeyDown,
@@ -88,8 +90,9 @@ export const AssistantPanel: React.FC<AssistantPanelProps> = ({
         )}
         {messages.map((msg, i) => (
             <div key={i} className={`flex flex-col gap-2 ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
-              <div className={`max-w-[90%] px-4 py-3 rounded-2xl text-xs leading-relaxed shadow-sm ${msg.role === 'user' ? 'bg-emerald-500 text-slate-950 font-black rounded-br-sm shadow-emerald-500/20' : (theme === 'dark' ? 'bg-white/10 text-white rounded-bl-sm border border-white/10' : 'bg-white text-slate-900 rounded-bl-sm border border-slate-200 shadow-sm')}`}>
+              <div className={`max-w-[90%] px-4 py-3 rounded-2xl text-xs leading-relaxed shadow-sm transition-all duration-300 ${msg.role === 'user' ? (msg.isFinal === false ? 'bg-emerald-500/70 text-slate-950/70' : 'bg-emerald-500 text-slate-950 font-black') + ' rounded-br-sm shadow-emerald-500/20' : (theme === 'dark' ? 'bg-white/10 text-white rounded-bl-sm border border-white/10' : 'bg-white text-slate-900 rounded-bl-sm border border-slate-200 shadow-sm')}`}>
                 {translate(msg.text, lang)}
+                {msg.role === 'user' && msg.isFinal === false && <span className="ml-1 animate-pulse italic opacity-50">...</span>}
               </div>
               {msg.uiCards?.map(card => (
                 <div key={card.id} className={`w-[90%] border border-emerald-500/30 p-2 rounded-xl flex items-center gap-3 shadow-xl relative overflow-hidden group ml-2 mb-2 ${theme === 'dark' ? 'bg-slate-900' : 'bg-white'}`}>
@@ -124,7 +127,9 @@ export const AssistantPanel: React.FC<AssistantPanelProps> = ({
               <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
               <span className={`text-[8px] font-black uppercase tracking-widest ${theme === 'dark' ? 'text-blue-400' : 'text-blue-500'}`}>{callStatus}</span>
             </div>
-            <p className={`text-[9px] italic ${theme === 'dark' ? 'text-white/40' : 'text-slate-400'}`}>Sára is listening...</p>
+            <p className={`text-[9px] italic ${theme === 'dark' ? 'text-white/40' : 'text-slate-400'}`}>
+              {callStatusMessage || 'Sára is listening...'}
+            </p>
           </div>
         )}
         <div ref={chatEndRef} />

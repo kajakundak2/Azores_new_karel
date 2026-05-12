@@ -190,6 +190,7 @@ ${activeTrip.originalRequest ? `USER INITIAL REQUEST: ${activeTrip.originalReque
               duration: act.duration || 60,
               cost: aiCost !== undefined ? aiCost : undefined,
               priceInEuro: placeData?.priceInEuro || (act.cost ? String(act.cost) : undefined),
+              time: act.startTime || undefined,
               startTime: act.startTime || undefined,
               address: placeData?.address || act.address || (typeof act.title === 'string' ? act.title : act.title.en),
               imageUrl: placeData?.imageUrl
@@ -285,16 +286,29 @@ ${activeTrip.originalRequest ? `USER INITIAL REQUEST: ${activeTrip.originalReque
     } else if (name === 'modify_poi') {
       const dayIso = dayNumToIso(args.day);
       const dayPois = itinerary[dayIso] || [];
+      console.log(`[Tool:modify_poi] Day ${args.day} (${dayIso}): ${dayPois.length} POIs, searching for "${args.poiTitle}"`);
       const target = dayPois.find(p => (typeof p.title === 'string' ? p.title : p.title.en).toLowerCase().includes(args.poiTitle.toLowerCase()));
-      if (target && modifyPoi) await modifyPoi(dayIso, target.id, args.changes || {});
-      replyText = { en: `Updated "${args.poiTitle}".`, cs: `Upraveno "${args.poiTitle}".` };
+      if (target && modifyPoi) {
+        console.log(`[Tool:modify_poi] Found "${target.id}", applying changes:`, args.changes);
+        await modifyPoi(dayIso, target.id, args.changes || {});
+        replyText = { en: `Updated "${args.poiTitle}".`, cs: `Upraveno "${args.poiTitle}".` };
+      } else {
+        console.warn(`[Tool:modify_poi] Could not find "${args.poiTitle}" in day ${args.day}. Available:`, dayPois.map(p => typeof p.title === 'string' ? p.title : p.title.en));
+        replyText = { en: `Could not find "${args.poiTitle}" in Day ${args.day}.`, cs: `Nenašla jsem "${args.poiTitle}" v dni ${args.day}.` };
+      }
     } else if (name === 'move_poi') {
       const fromIso = dayNumToIso(args.fromDay);
       const toIso = dayNumToIso(args.toDay);
       const dayPois = itinerary[fromIso] || [];
+      console.log(`[Tool:move_poi] Day ${args.fromDay} (${fromIso}): ${dayPois.length} POIs, searching for "${args.poiTitle}"`);
       const target = dayPois.find(p => (typeof p.title === 'string' ? p.title : p.title.en).toLowerCase().includes(args.poiTitle.toLowerCase()));
-      if (target && movePoi) await movePoi(fromIso, toIso, target.id);
-      replyText = { en: `Moved to Day ${args.toDay}.`, cs: `Přesunuto na den ${args.toDay}.` };
+      if (target && movePoi) {
+        await movePoi(fromIso, toIso, target.id);
+        replyText = { en: `Moved to Day ${args.toDay}.`, cs: `Přesunuto na den ${args.toDay}.` };
+      } else {
+        console.warn(`[Tool:move_poi] Could not find "${args.poiTitle}" in day ${args.fromDay}.`);
+        replyText = { en: `Could not find "${args.poiTitle}" in Day ${args.fromDay}.`, cs: `Nenašla jsem "${args.poiTitle}" v dni ${args.fromDay}.` };
+      }
     } else if (name === 'reorder_day') {
       const dayIso = dayNumToIso(args.day);
       const dayPois = itinerary[dayIso] || [];
@@ -395,7 +409,7 @@ ${activeTrip.originalRequest ? `USER INITIAL REQUEST: ${activeTrip.originalReque
 
     let retryCount = 0;
     const maxRetries = 6;
-    const chatModels = ['gemini-3.1-flash-lite-preview'];
+    const chatModels = ['gemini-flash-lite-latest'];
 
     while (retryCount < maxRetries) {
       const apiKey = geminiKeyManager.getNextKey();

@@ -38,6 +38,19 @@ interface TravelPortalProps {
   updatePoiTransportMode: (dayIso: string, poiId: string, mode: any) => void;
   updatePoi: (poi: POI) => Promise<void>;
   addReferenceDoc: (doc: any) => Promise<void>;
+  movePoi: (from: string, to: string, id: string) => Promise<void>;
+  modifyPoi: (day: string, id: string, changes: Partial<POI>) => Promise<void>;
+  reorderPois: (day: string, ids: string[]) => Promise<void>;
+  addStay: (stay: any) => Promise<void>;
+  removeStay: (id: string) => Promise<void>;
+  modifyStay: (id: string, changes: any) => Promise<void>;
+  addFlight: (flight: any) => Promise<void>;
+  removeFlight: (id: string) => Promise<void>;
+  addDay: () => Promise<void>;
+  removeDay: (dayIso: string) => Promise<void>;
+  setDayTheme: (dayIso: string, theme: string) => Promise<void>;
+  addToLibrary: (poi: POI) => Promise<void>;
+  removeFromLibrary: (id: string) => Promise<void>;
   lang: string;
   setLang: (lang: string) => void;
   theme: 'dark' | 'light';
@@ -59,6 +72,19 @@ export const TravelPortal: React.FC<TravelPortalProps> = ({
   updatePoiTransportMode,
   updatePoi,
   addReferenceDoc,
+  movePoi,
+  modifyPoi,
+  reorderPois,
+  addStay,
+  removeStay,
+  modifyStay,
+  addFlight,
+  removeFlight,
+  addDay,
+  removeDay,
+  setDayTheme,
+  addToLibrary,
+  removeFromLibrary,
   lang,
   setLang,
   theme,
@@ -74,6 +100,7 @@ export const TravelPortal: React.FC<TravelPortalProps> = ({
   const [activeDayIdx, setActiveDayIdx] = useState(0);
   const [showAllDays, setShowAllDays] = useState(false);
   const [callStatus, setCallStatus] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle');
+  const [callStatusMessage, setCallStatusMessage] = useState<string | null>(null);
   const [voiceVolume, setVoiceVolume] = useState(0);
   const [remoteVoiceVolume, setRemoteVoiceVolume] = useState(0);
   const [showPackingChecklist, setShowPackingChecklist] = useState(false);
@@ -84,6 +111,7 @@ export const TravelPortal: React.FC<TravelPortalProps> = ({
   const [activeId, setActiveId] = useState<string | null>(null);
   const [activeDragData, setActiveDragData] = useState<POI | null>(null);
   const [isListening, setIsListening] = useState(false);
+  const [isToolWorking, setIsToolWorking] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -118,7 +146,20 @@ export const TravelPortal: React.FC<TravelPortalProps> = ({
     lang,
     t,
     setNotification,
-    searchPlacesAsync
+    searchPlacesAsync,
+    movePoi,
+    modifyPoi,
+    reorderPois,
+    addStay,
+    removeStay,
+    modifyStay,
+    addFlight,
+    removeFlight,
+    addDay,
+    removeDay,
+    setDayTheme,
+    addToLibrary,
+    removeFromLibrary
   });
 
   const liveSystemInstruction = useMemo(() => {
@@ -126,15 +167,22 @@ export const TravelPortal: React.FC<TravelPortalProps> = ({
     const recentChatContext = messages.slice(-15).map(m => 
       `${m.role === 'user' ? 'Traveler' : 'Sára'}: ${typeof m.text === 'string' ? m.text : (lang === 'cs' ? m.text.cs : m.text.en)}`
     ).join('\n');
-    return `You are "Sára," the intelligent real-time conversational assistant for this trip.\n\n${generatePromptContext()}\n\nYour goal is to provide helpful, conversational travel advice.\nMULTILINGUAL: Always respond in the same language as the user speaks to you (English or Czech).\nTRANSCRIPTION: Ignore background noise. The user ONLY speaks English or Czech. Do not hallucinate other languages or scripts like Japanese or Hindi.\n\n${recentChatContext ? `CONVERSATION HISTORY:\n${recentChatContext}\n` : ''}\nCORE CAPABILITIES: Trigger generation, search places, add to itinerary.`;
+    return `${generatePromptContext()}\n\nTRANSCRIPTION: Ignore background noise. The user ONLY speaks English or Czech. Do not hallucinate other languages or scripts like Japanese or Hindi.\n\n${recentChatContext ? `CONVERSATION HISTORY:\n${recentChatContext}\n` : ''}`;
   }, [activeTrip, messages, generatePromptContext, lang]);
 
   const { isActive: isVoiceActive, startCall, stopCall } = useLiveGemini({
     systemInstruction: liveSystemInstruction,
     lang: lang,
-    onStatusChange: setCallStatus,
+    onStatusChange: (status, msg) => {
+      setCallStatus(status);
+      setCallStatusMessage(msg || null);
+    },
     onVolumeChange: setVoiceVolume,
     onRemoteVolumeChange: setRemoteVoiceVolume,
+    onCallInterrupt: () => {
+      // Logic for when Sára is interrupted (could show a visual hint)
+      setNotification(lang === 'cs' ? 'Sára vás slyší...' : 'Sara is listening to you...');
+    },
     onMessage: (text) => {
       setMessages(prev => {
         const last = prev[prev.length - 1];
@@ -146,28 +194,45 @@ export const TravelPortal: React.FC<TravelPortalProps> = ({
         return [...prev, { role: 'model', text: { en: text, cs: text } }];
       });
     },
-    onUserMessage: (text) => {
-      // Filter out 'hallucinated' translations in wrong scripts (e.g. Japanese, Hindi)
-      // while speaking Czech or English.
-      const hasOrientalScript = /[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9faf\u0900-\u097f]/.test(text);
-      if (hasOrientalScript && text.length < 15) return; // Keep long ones just in case, but ignore short hallucinations
+    onUserMessage: (text, isFinal) => {
+      // Filter out 'hallucinated' translations in wrong scripts (e.g. Japanese, Hindi, Chinese)
+      const hasOrientalScript = /[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9faf\u0900-\u097f\uac00-\ud7af]/.test(text);
+      // We allow long strings even if they have weird characters (just in case), but short ones are likely hallucinated noise
+      if (hasOrientalScript && text.length < 10) return; 
+      // If it's pure non-latin/non-czech characters and short, skip it
+      if (text.length < 4 && !/[a-zA-ZáčďéěíňóřšťúůýžÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ]/.test(text)) return;
 
       setMessages(prev => {
         const last = prev[prev.length - 1];
-        if (last && last.role === 'user') {
-          return [...prev.slice(0, -1), { ...last, text: { en: text, cs: text } }];
+        // If the last message is a user message and it wasn't marked as final, update it.
+        // If it was final, or the last message isn't from the user, start a new one.
+        if (last && last.role === 'user' && !last.isFinal) {
+          return [...prev.slice(0, -1), { ...last, text: { en: text, cs: text }, isFinal }];
         }
-        return [...prev, { role: 'user', text: { en: text, cs: text } }];
+        return [...prev, { role: 'user', text: { en: text, cs: text }, isFinal }];
       });
     },
     onShowUICard: (card) => setMessages(prev => [...prev, { role: 'model', text: { en: 'Here is what I found:', cs: 'Tady je, co jsem našla:' }, uiCards: [card] }]),
-    onUploadDoc: (f) => handleFileUpload(f, addReferenceDoc),
-    onToolCall: async (name, args) => {
-      const result = await handleToolCall(name, args);
-      if (result.uiCards) {
-        setMessages(prev => [...prev, { role: 'model', text: result.replyText, uiCards: result.uiCards }]);
+    onUploadDoc: async (f) => {
+      await handleFileUpload(f, addReferenceDoc);
+      // Voice context awareness: Reconnect if file uploaded during call
+      if (isVoiceActive) {
+        setNotification(t('reconnecting_context'));
+        stopCall();
+        setTimeout(() => startCall(), 1500);
       }
-      return result;
+    },
+    onToolCall: async (name, args) => {
+      setIsToolWorking(true);
+      try {
+        const result = await handleToolCall(name, args);
+        if (result.uiCards) {
+          setMessages(prev => [...prev, { role: 'model', text: result.replyText, uiCards: result.uiCards }]);
+        }
+        return result;
+      } finally {
+        setIsToolWorking(false);
+      }
     }
   });
 
@@ -176,7 +241,7 @@ export const TravelPortal: React.FC<TravelPortalProps> = ({
     voiceVolume,
     remoteVoiceVolume,
     isVoiceActive,
-    isChatLoading,
+    isChatLoading: isChatLoading || isToolWorking,
     isChatOpen: messages.length > 0
   });
 
@@ -239,6 +304,13 @@ export const TravelPortal: React.FC<TravelPortalProps> = ({
     });
   }, [atlasSearchResults, activeTrip?.libraryPois, itinerary]);
 
+  const allPoisMemo = useMemo(() => {
+    if (!activeTrip) return [];
+    const lib = activeTrip.libraryPois || [];
+    const libIds = new Set(lib.map((p: any) => p.id));
+    return [...lib, ...mergedSearchResults.filter(p => !libIds.has(p.id))];
+  }, [activeTrip?.libraryPois, mergedSearchResults]);
+
   return (
     <DndContext onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
       <div className="flex flex-col-reverse md:flex-row h-screen w-full font-sans transition-colors duration-700 overflow-hidden bg-zinc-950">
@@ -261,8 +333,8 @@ export const TravelPortal: React.FC<TravelPortalProps> = ({
           <AssistantPanel 
             theme={theme} lang={lang} messages={messages} saraState={saraState} 
             chatContainerRef={chatContainerRef} chatEndRef={chatEndRef} isChatLoading={isChatLoading} 
-            isVoiceActive={isVoiceActive} callStatus={callStatus} chatInput={chatInput} setChatInput={setChatInput}
-            handleChatKeyDown={(e) => { if(e.key === 'Enter') handleSendMessage(); }} startCall={startCall} stopCall={stopCall}
+            isVoiceActive={isVoiceActive} callStatus={callStatus} callStatusMessage={callStatusMessage} chatInput={chatInput} setChatInput={setChatInput}
+            handleChatKeyDown={(e) => { if(e.key === 'Enter') handleSendMessage(); }} startCall={() => startCall(true)} stopCall={stopCall}
             setIsListening={setIsListening} isListening={isListening} fileInputRef={fileInputRef} handleFileUpload={(f) => handleFileUpload(f, addReferenceDoc)}
             handleSendMessage={handleSendMessage} addPoi={addPoi} currentIso={currentIso} safeActiveDayIdx={activeDayIdx} t={t} setNotification={setNotification}
           />
@@ -289,12 +361,7 @@ export const TravelPortal: React.FC<TravelPortalProps> = ({
               activeDayItems={activeDayItems} allDaysData={days.map((d, i) => ({ pois: itinerary[toLocalIso(d)] || [], dayIndex: i }))}
               showAllDays={showAllDays} activeDayIdx={activeDayIdx} activeDayIso={currentIso} lang={lang}
               onPoiClick={setSelectedPoi} hoveredPoiId={hoveredPoiId} onMarkerHover={setHoveredPoiId}
-              allPois={(() => {
-                const lib = activeTrip?.libraryPois || [];
-                const libIds = new Set(lib.map((p: any) => p.id));
-                // Use mergedSearchResults here too so map markers have AI data!
-                return [...lib, ...mergedSearchResults.filter(p => !libIds.has(p.id))];
-              })()} tripDestination={activeTrip?.destination}
+              allPois={allPoisMemo} tripDestination={activeTrip?.destination}
               onAddToDay={(poi) => addPoi(currentIso, poi)} showAtlasMarkers={isLibraryOpen} theme={theme}
               currency={currency} rates={rates}
             />
