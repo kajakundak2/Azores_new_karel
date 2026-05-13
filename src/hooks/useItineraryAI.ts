@@ -482,6 +482,12 @@ ALWAYS respond in this JSON format. Never respond in plain text.`;
 
       } catch (err: any) {
         console.error('AI Error:', err);
+        const isLeaked = err.message?.toLowerCase().includes('leaked') || err.message?.includes('403');
+        if (isLeaked && retryCount < maxRetries - 1) {
+           geminiKeyManager.markKeyFailed(apiKey, true, 60, true);
+           retryCount++;
+           continue;
+        }
         if ((err.message?.includes('429') || err.message?.includes('503')) && retryCount < maxRetries - 1) {
           geminiKeyManager.markKeyFailed(apiKey, true, 60); 
           retryCount++;

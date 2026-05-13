@@ -802,16 +802,23 @@ export function useLiveGemini({
         if (isActiveRef.current) {
           console.log('Gemini Live: [WS_CLOSED] Code:', e.code, 'Reason:', e.reason || 'No reason provided');
           
-          // Codes to NOT reconnect: 1000 (normal), 1008 (policy violation/bad key), 400x (manual/proactive)
-          const isFatal = e.code === 1008 || e.code === 4001; 
+          const isLeaked = e.code === 1008 && e.reason && e.reason.toLowerCase().includes('leaked');
+          if (isLeaked) {
+            console.log(`Gemini Live: [LEAKED_KEY] Key ${apiKey.substring(0, 8)}... leaked. Blocking and rotating.`);
+            geminiKeyManager.markKeyFailed(apiKey, true, 60, true);
+          }
+
+          // Codes to NOT reconnect: 1000 (normal), 1008 (policy violation/bad key unless leaked), 400x (manual/proactive)
+          const hasMoreKeys = geminiKeyManager.getAvailableCount() > 0;
+          const isFatal = (!isLeaked && e.code === 1008) || (isLeaked && !hasMoreKeys) || e.code === 4001; 
           
           if (!isFatal && reconnectCountRef.current < maxReconnects && e.code !== 1000) {
             const isProactive = e.code === 4000;
             console.log(`Gemini Live: [RECONNECTING] ${isProactive ? 'Proactive' : 'Unexpected'} reconnect ${reconnectCountRef.current + 1}/${maxReconnects}...`);
             
-            if (!isProactive) reconnectCountRef.current++;
+            if (!isProactive && !isLeaked) reconnectCountRef.current++;
             
-            callbacksRef.current.onStatusChange?.('connecting', isProactive ? 'Refreshing session...' : 'Reconnecting...');
+            callbacksRef.current.onStatusChange?.('connecting', isProactive ? 'Refreshing session...' : (isLeaked ? 'Switching API key...' : 'Reconnecting...'));
             
             setTimeout(() => {
               if (isActiveRef.current) {

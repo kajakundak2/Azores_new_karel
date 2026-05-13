@@ -96,6 +96,13 @@ CRITICAL: The rawText must contain the COMPLETE text for each day. Do NOT summar
       return parsed;
     } catch (err: any) {
       console.error('Splitter error:', err);
+      const isLeaked = err.message?.toLowerCase().includes('leaked') || err.message?.includes('403');
+      if (isLeaked) {
+        geminiKeyManager.markKeyFailed(apiKey, true, 60, true);
+        retryCount++;
+        await delay(1000);
+        continue;
+      }
       if (err.message?.includes('429') || err.message?.includes('503') || err.message?.includes('fetch failed')) {
         geminiKeyManager.markKeyFailed(apiKey, true, 60); // 60s cooldown on quotas/503
         retryCount++;
@@ -207,6 +214,13 @@ Return ONLY valid JSON (no markdown code blocks):
       return parsed as ParsedDay;
     } catch (err: any) {
       console.error(`Worker error (Day ${dayChunk.dayNumber}):`, err);
+      const isLeaked = err.message?.toLowerCase().includes('leaked') || err.message?.includes('403');
+      if (isLeaked) {
+        geminiKeyManager.markKeyFailed(apiKey, true, 60, true);
+        retryCount++;
+        await delay(1000);
+        continue;
+      }
       if (err.message?.includes('429') || err.message?.includes('503') || err.message?.includes('fetch failed')) {
         geminiKeyManager.markKeyFailed(apiKey, true, 60);
         retryCount++;
@@ -319,6 +333,16 @@ Day 1: [Theme]
       outline = outlineResult.text || '';
     } catch (err: any) {
       console.error('Outline generation error:', err);
+      const isLeaked = err.message?.toLowerCase().includes('leaked') || err.message?.includes('403');
+      if (isLeaked) {
+        geminiKeyManager.markKeyFailed(apiKey, true, 60, true);
+        apiKey = geminiKeyManager.getNextKey();
+        if (!apiKey) throw new Error('Quota exhausted or service unavailable during outline Phase 1.');
+        ai = new GoogleGenAI({ apiKey });
+        outlineRetries++;
+        await delay(1000);
+        continue;
+      }
       if (err.message?.includes('429') || err.message?.includes('503')) {
         geminiKeyManager.markKeyFailed(apiKey, true, 60);
         apiKey = geminiKeyManager.getNextKey();
@@ -409,6 +433,13 @@ Return ONLY valid JSON:
         
       } catch (err: any) {
         console.error(`Generation error (Day ${dayNum}):`, err);
+        const isLeaked = err.message?.toLowerCase().includes('leaked') || err.message?.includes('403');
+        if (isLeaked) {
+          geminiKeyManager.markKeyFailed(apiKey, true, 60, true);
+          retryCount++;
+          await delay(1000);
+          continue;
+        }
         if (err.message?.includes('429') || err.message?.includes('503') || err.message?.includes('fetch failed')) {
           geminiKeyManager.markKeyFailed(apiKey, true, 60);
           retryCount++;
@@ -559,8 +590,11 @@ Format required:
       cost: parsed.cost !== null ? parsed.cost : undefined,
       duration: parsed.duration || 60
     };
-  } catch (err) {
+  } catch (err: any) {
     console.error('Failed to enrich place via AI:', err);
+    if (err.message?.toLowerCase().includes('leaked') || err.message?.includes('403')) {
+      geminiKeyManager.markKeyFailed(apiKey, true, 60, true);
+    }
     throw new Error('Failed to generate place details.');
   }
 }

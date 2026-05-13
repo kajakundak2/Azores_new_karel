@@ -93,12 +93,35 @@ class GeminiKeyManager {
    * @param key The key that failed.
    * @param isFatal Whether the error is fatal (currently unused but kept for compatibility).
    * @param cooldownSec Cooldown duration in seconds (default 60).
+   * @param isLeaked Whether the API key has been reported as leaked (403 Permission Denied).
    */
-  markKeyFailed(key: string, isFatal: boolean = false, cooldownSec: number = 60) {
+  markKeyFailed(key: string, isFatal: boolean = false, cooldownSec: number = 3600, isLeaked: boolean = false) {
     if (!key) return;
     
+    if (isLeaked) {
+      console.error(`GeminiKeyManager: Key reported as LEAKED! Permanently blocking: ${key.substring(0, 8)}...`);
+      // Remove the key from the pool
+      this.keys = this.keys.filter(k => k !== key);
+      
+      // Dispatch an event to notify the UI
+      window.dispatchEvent(new CustomEvent('gemini-key-leaked', {
+        detail: { keyPrefix: key.substring(0, 8) }
+      }));
+      
+      // Adjust currentIdx if necessary
+      if (this.keys.length > 0) {
+        this.currentIdx = this.currentIdx % this.keys.length;
+      }
+      return;
+    }
+
     console.error(`GeminiKeyManager: Key reported error (fatal: ${isFatal}). Cooling down for ${cooldownSec}s: ${key.substring(0, 8)}...`);
     this.cooldowns.set(key, Date.now() + cooldownSec * 1000);
+    
+    // Dispatch an event to notify the UI of temporary block
+    window.dispatchEvent(new CustomEvent('gemini-key-error', {
+      detail: { keyPrefix: key.substring(0, 8), cooldownSec }
+    }));
     
     // Immediately rotate to next key for next call
     this.currentIdx = (this.currentIdx + 1) % this.keys.length;
