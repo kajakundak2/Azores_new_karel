@@ -159,6 +159,8 @@ export function PlannerChat({
           <div className="flex-1 relative group/input flex flex-col gap-3">
             <div className="relative">
               <input
+                  id="planner-chat-input"
+                  name="planner-chat-input"
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   disabled={loading}
@@ -206,6 +208,8 @@ export function PlannerChat({
                 </button>
 
                 <input 
+                  id="planner-file-input"
+                  name="planner-file-input"
                   type="file" 
                   ref={fileInputRef} 
                   className="hidden" 

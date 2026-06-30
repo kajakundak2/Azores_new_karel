@@ -240,7 +240,7 @@ export function TreasureHuntGame({ isOpen, onClose, language }: Props) {
 
             {isWin && !scoreSaved && (
               <div style={{display:'flex',gap:8,alignItems:'center'}}>
-                <input className="vd-name-input" placeholder={t('game_enter_name', language)} value={playerName} onChange={e => setPlayerName(e.target.value)} maxLength={20} />
+                <input id="game-player-name" name="game-player-name" className="vd-name-input" placeholder={t('game_enter_name', language)} value={playerName} onChange={e => setPlayerName(e.target.value)} maxLength={20} />
                 <button className="vd-btn primary" onClick={saveScore} disabled={!playerName.trim()}>{t('game_save_score', language)}</button>
               </div>
             )}

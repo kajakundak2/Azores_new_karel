@@ -765,10 +765,15 @@ export function useLiveGemini({
               console.log(`Gemini Live: [TOOL_START] ${name}`, args);
               const result = await callbacksRef.current.onToolCall!(name, args || {});
               console.log(`Gemini Live: [TOOL_SUCCESS] ${name} Result:`, result);
+              
+              const msg = result?.replyText 
+                ? (typeof result.replyText === 'string' ? result.replyText : result.replyText.en)
+                : (result?.message || `Executed ${name}.`);
+
               // Send success response back to the model
               sendResponse({ 
                 success: true, 
-                message: result?.message || `Executed ${name}.` 
+                message: msg 
               });
               // Clear tool status
               callbacksRef.current.onStatusChange?.('connected');

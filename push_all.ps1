@@ -1,4 +1,5 @@
 # Expedition Planner - Deployment Script
+# to run use this command: .\push_all.ps1
 # This script builds the app, deploys it to Firebase Hosting, and pushes changes to GitHub.
 
 Write-Host "Starting Deployment Process..." -ForegroundColor Cyan

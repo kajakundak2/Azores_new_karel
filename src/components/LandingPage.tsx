@@ -168,6 +168,31 @@ export function LandingPage({ trips, onCreateTrip, onSelectTrip, onDeleteTrip, l
     onStatusChange: setCallStatus,
     onVolumeChange: setVoiceVolume,
     onRemoteVolumeChange: setRemoteVoiceVolume,
+    onToolCall: async (name, args) => {
+        if (name === 'update_trip_details') {
+            handleDataExtracted(args);
+            return { success: true, replyText: { en: "I've updated the trip details.", cs: "Aktualizovala jsem detaily vaší cesty." } };
+        } else if (name === 'trigger_smart_itinerary_generation') {
+            localStorage.setItem('auto_generate_smart_itinerary', 'true');
+            if (args.intensity) localStorage.setItem('smart_itinerary_intensity', args.intensity);
+            handleCreate({ preventDefault: () => {} } as any, 'full');
+            stopCall();
+            return { success: true, replyText: { en: "I'm launching the itinerary builder now.", cs: "Spouštím generování itineráře." } };
+        } else if (name === 'set_traveler_profiles') {
+            if (args.travelers) setTravelerProfiles(args.travelers);
+            return { success: true, replyText: { en: "I've recorded the traveler profiles.", cs: "Uložila jsem profily cestovatelů." } };
+        } else if (name === 'set_packing_requirements') {
+            let reqs: string[] = [];
+            if (typeof args.requirements === 'string') {
+              reqs = args.requirements.split(',').map((s: string) => s.trim()).filter(Boolean);
+            } else if (Array.isArray(args.requirements)) {
+              reqs = args.requirements;
+            }
+            if (reqs.length > 0) setPackingRequirements(reqs);
+            return { success: true, replyText: { en: "I've noted the packing requirements.", cs: "Poznamenala jsem si požadavky na balení." } };
+        }
+        return { success: false, message: 'Tool ' + name + ' is not fully supported on the landing page yet.' };
+    },
     onMessage: (text) => {
       setMessages(prev => {
         const last = prev[prev.length - 1];
@@ -176,20 +201,6 @@ export function LandingPage({ trips, onCreateTrip, onSelectTrip, onDeleteTrip, l
         }
         return [...prev, { role: 'model', text }];
       });
-    },
-    onUpdateTripDetails: handleDataExtracted,
-    onUpdateItinerary: async (data: any) => {
-        if (data.type === 'set_trip_details') handleDataExtracted(data);
-        if (data.type === 'launch_itinerary') {
-            handleCreate({ preventDefault: () => {} } as any, data.planningMode || 'full');
-            stopCall();
-        }
-    },
-    onTriggerSmartItinerary: (intensity) => {
-        localStorage.setItem('auto_generate_smart_itinerary', 'true');
-        if (intensity) localStorage.setItem('smart_itinerary_intensity', intensity);
-        handleCreate({ preventDefault: () => {} } as any, 'full');
-        stopCall();
     },
     onUserMessage: (text, isFinal) => {
       setMessages(prev => {
@@ -345,10 +356,12 @@ export function LandingPage({ trips, onCreateTrip, onSelectTrip, onDeleteTrip, l
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div className={`p-6 rounded-[2rem] transition-all border ${pulsingField === 'destination' ? 'bg-emerald-500/10 border-emerald-500 shadow-[0_0_20px_rgba(16,185,129,0.15)]' : 'bg-white dark:bg-white/5 border-slate-100 dark:border-white/10 shadow-sm'}`}>
-                            <label className={`block text-[10px] font-black uppercase tracking-widest mb-3 ml-1 text-left ${theme === 'dark' ? 'text-white/30' : 'text-slate-500'}`}>{t('landing_destination_label')}</label>
+                            <label htmlFor="landing-destination" className={`block text-[10px] font-black uppercase tracking-widest mb-3 ml-1 text-left ${theme === 'dark' ? 'text-white/30' : 'text-slate-500'}`}>{t('landing_destination_label')}</label>
                             <div className="flex items-center gap-4">
                                 <MapPin className="text-emerald-500 h-6 w-6" />
                                 <input 
+                                    id="landing-destination"
+                                    name="landing-destination"
                                     type="text"
                                     value={destination}
                                     onChange={(e) => setDestination(e.target.value)}
@@ -359,13 +372,13 @@ export function LandingPage({ trips, onCreateTrip, onSelectTrip, onDeleteTrip, l
                         </div>
 
                         <div className={`p-6 rounded-[2rem] transition-all border ${pulsingField === 'startDate' || pulsingField === 'endDate' ? 'bg-emerald-500/10 border-emerald-500 shadow-[0_0_20px_rgba(16,185,129,0.15)]' : 'bg-white dark:bg-white/5 border-slate-100 dark:border-white/10 shadow-sm'}`}>
-                            <label className={`block text-[10px] font-black uppercase tracking-widest mb-3 ml-1 text-left ${theme === 'dark' ? 'text-white/30' : 'text-slate-500'}`}>{t('landing_timeframe_label')}</label>
+                            <label htmlFor="landing-start-date" className={`block text-[10px] font-black uppercase tracking-widest mb-3 ml-1 text-left ${theme === 'dark' ? 'text-white/30' : 'text-slate-500'}`}>{t('landing_timeframe_label')}</label>
                             <div className="flex items-center gap-4">
                                 <Calendar className="text-emerald-500 h-6 w-6" />
                                 <div className="flex items-center gap-2 flex-1 min-w-0">
-                                    <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className={`bg-transparent border-none text-[10px] sm:text-sm font-black focus:ring-0 w-full p-0 text-left ${theme === 'light' ? 'text-slate-900' : 'text-white'}`} style={{ colorScheme: theme }} />
+                                    <input id="landing-start-date" name="landing-start-date" type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className={`bg-transparent border-none text-[10px] sm:text-sm font-black focus:ring-0 w-full p-0 text-left ${theme === 'light' ? 'text-slate-900' : 'text-white'}`} style={{ colorScheme: theme }} />
                                     <span className="text-slate-300 dark:text-white/20">→</span>
-                                    <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className={`bg-transparent border-none text-[10px] sm:text-sm font-black focus:ring-0 w-full p-0 text-right ${theme === 'light' ? 'text-slate-900' : 'text-white'}`} style={{ colorScheme: theme }} />
+                                    <input id="landing-end-date" name="landing-end-date" type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className={`bg-transparent border-none text-[10px] sm:text-sm font-black focus:ring-0 w-full p-0 text-right ${theme === 'light' ? 'text-slate-900' : 'text-white'}`} style={{ colorScheme: theme }} />
                                 </div>
                             </div>
                         </div>
@@ -407,6 +420,8 @@ export function LandingPage({ trips, onCreateTrip, onSelectTrip, onDeleteTrip, l
                                         <div key={i} className="flex flex-col gap-2">
                                             <span className="text-[9px] font-black text-slate-400 uppercase ml-1 flex text-left">C{i+1}</span>
                                             <input 
+                                                id={`kid-age-${i}`}
+                                                name={`kid-age-${i}`}
                                                 type="number" min="0" max="17" value={age}
                                                 onChange={e => {
                                                     const newAges = [...kidsAges];
@@ -428,7 +443,7 @@ export function LandingPage({ trips, onCreateTrip, onSelectTrip, onDeleteTrip, l
                     
                     {/* Strategy Selector */}
                     <div className="mb-8 flex flex-col items-center">
-                        <label className={`text-[10px] font-black uppercase tracking-widest mb-4 ${theme === 'dark' ? 'text-white/30' : 'text-slate-500'}`}>{t('planning_strategy')}</label>
+                        <span className={`text-[10px] font-black uppercase tracking-widest mb-4 ${theme === 'dark' ? 'text-white/30' : 'text-slate-500'}`}>{t('planning_strategy')}</span>
                         <div className={`p-1 rounded-2xl flex gap-1 border transition-all ${theme === 'dark' ? 'bg-white/5 border-white/10' : 'bg-slate-100/50 border-slate-200'}`}>
                             <button 
                                 onClick={() => setPlanningMode('full')}

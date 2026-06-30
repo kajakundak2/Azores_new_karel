@@ -265,8 +265,21 @@ ${activeTrip.originalRequest ? `USER INITIAL REQUEST: ${activeTrip.originalReque
       if (target) removePoi(dayIso, target.id);
       replyText = { en: 'Removed.', cs: 'Odstraněno.' };
     } else if (name === 'trigger_smart_itinerary_generation') {
-      handleSmartGeneration(args.intensity || 'balanced', args.dayNumbers);
-      replyText = { en: 'Smart generation started.', cs: 'Chytré generování spuštěno.' };
+      const missingFields = [];
+      if (!activeTrip.destination) missingFields.push('destination');
+      if (!activeTrip.startDate) missingFields.push('start date');
+      if (!activeTrip.endDate) missingFields.push('end date');
+      if (!activeTrip.travelers) missingFields.push('traveler count');
+
+      if (missingFields.length > 0) {
+        const msgEn = `I am missing some required information to generate the itinerary: ${missingFields.join(', ')}. Please provide them first.`;
+        const msgCs = `Chybí mi nějaké informace pro vytvoření itineráře: ${missingFields.join(', ')}. Prosím, poskytněte je nejdříve.`;
+        replyText = { en: msgEn, cs: msgCs };
+        console.warn(`[Tool:trigger_smart_itinerary_generation] Blocked. Missing: ${missingFields.join(', ')}`);
+      } else {
+        handleSmartGeneration(args.intensity || 'balanced', args.dayNumbers);
+        replyText = { en: 'Smart generation started.', cs: 'Chytré generování spuštěno.' };
+      }
     } else if (name === 'clear_day') {
       await clearDay(dayNumToIso(args.day));
       replyText = { en: `Day ${args.day} cleared.`, cs: `Den ${args.day} vyčištěn.` };
@@ -281,7 +294,15 @@ ${activeTrip.originalRequest ? `USER INITIAL REQUEST: ${activeTrip.originalReque
       }
       replyText = { en: 'Bulk update applied.', cs: 'Hromadná aktualizace použita.' };
     } else if (name === 'update_trip_details') {
-      if (activeTripId) { const { ...details } = args; await updateTrip(activeTripId, details); }
+      if (activeTripId) { 
+        const { ...details } = args; 
+        if (details.adults !== undefined || details.kids !== undefined) {
+           const adults = details.adults ?? activeTrip.adults ?? 1;
+           const kids = details.kids ?? activeTrip.kids ?? 0;
+           details.travelers = adults + kids;
+        }
+        await updateTrip(activeTripId, details); 
+      }
       replyText = { en: 'Trip details updated.', cs: 'Detaily výletu aktualizovány.' };
     } else if (name === 'modify_poi') {
       const dayIso = dayNumToIso(args.day);

@@ -122,7 +122,7 @@ function ClassicMarkers({
         const marker = new markerLib.AdvancedMarkerElement({
           map,
           position: { lat: poi.location.lat, lng: poi.location.lng },
-          content: pin.element, 
+          content: pin,
           title: poi.title.en || poi.title.cs,
         });
 
@@ -205,7 +205,7 @@ function ClassicMarkers({
           glyphColor: isHovered ? color : 'white',
           scale: isHovered ? (label ? 1.4 : 1.2) : (label ? 1.2 : 0.9),
         });
-        marker.content = pin.element;
+        marker.content = pin;
       }
     });
   }, [hoveredId, markers, map, markerLib]);

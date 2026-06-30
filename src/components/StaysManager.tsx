@@ -202,6 +202,8 @@ export function StaysManager({ trip, lang, currency, rates, onUpdate, onAddStayT
             >
               <div className="relative">
                 <input 
+                  id="stays-search"
+                  name="stays-search"
                   type="text" 
                   value={searchQuery}
                   onChange={e => setSearchQuery(e.target.value)}
@@ -277,6 +279,8 @@ export function StaysManager({ trip, lang, currency, rates, onUpdate, onAddStayT
                       <div className="space-y-1">
                         <span className="text-[8px] font-black uppercase tracking-widest text-white/20">{t('stays_checkin')}</span>
                         <input 
+                          id={`stay-${stay.id}-checkin`}
+                          name={`stay-${stay.id}-checkin`}
                           type="date"
                           value={stay.checkInDate}
                           onChange={e => updateStay(stay.id, { checkInDate: e.target.value })}
@@ -286,6 +290,8 @@ export function StaysManager({ trip, lang, currency, rates, onUpdate, onAddStayT
                       <div className="space-y-1">
                         <span className="text-[8px] font-black uppercase tracking-widest text-white/20">{t('stays_checkout')}</span>
                         <input 
+                          id={`stay-${stay.id}-checkout`}
+                          name={`stay-${stay.id}-checkout`}
                           type="date"
                           value={stay.checkOutDate}
                           onChange={e => updateStay(stay.id, { checkOutDate: e.target.value })}
@@ -296,6 +302,8 @@ export function StaysManager({ trip, lang, currency, rates, onUpdate, onAddStayT
                         <span className="text-[8px] font-black uppercase tracking-widest text-white/20">{t('price_per_night')}</span>
                         <div className="relative">
                           <input 
+                            id={`stay-${stay.id}-price`}
+                            name={`stay-${stay.id}-price`}
                             type="number"
                             value={stay.pricePerNight}
                             onChange={e => updateStay(stay.id, { pricePerNight: parseFloat(e.target.value) || 0 })}

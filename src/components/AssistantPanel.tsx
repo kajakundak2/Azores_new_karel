@@ -153,6 +153,8 @@ export const AssistantPanel: React.FC<AssistantPanelProps> = ({
             <Paperclip className="w-4 h-4" />
         </button>
         <input 
+          id="assistant-file-input"
+          name="assistant-file-input"
           type="file" 
           ref={fileInputRef} 
           className="hidden" 
@@ -164,6 +166,8 @@ export const AssistantPanel: React.FC<AssistantPanelProps> = ({
           accept=".txt,.md,.pdf,.doc,.docx"
         />
         <input 
+          id="assistant-chat-input"
+          name="assistant-chat-input"
           value={chatInput} 
           onChange={e => setChatInput(e.target.value)} 
           onKeyDown={handleChatKeyDown} 

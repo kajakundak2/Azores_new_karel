@@ -1,27 +1,24 @@
-I have reviewed your implementation plan. We are going to proceed with using the modern Routes API (google.maps.routes.Route.computeRoutes), NOT the legacy DirectionsService, because DirectionsService is officially deprecated as of early 2026.
-However, your previous attempt failed because of several structural mistakes regarding how the new JS SDK expects the payload and how React renders it.
-Please execute the implementation with the following strict technical requirements:
-1. Fix the InvalidValueError & Route Fetching (VerticalTimeline.tsx):
-The Error: You got InvalidValueError: in property fields: contains invalid fields: routes.duration... because the JavaScript SDK does NOT use the routes. prefix in the field mask like the REST API does.
-The Fix: When calling computeRoutes(request), set your fields array strictly to: fields:['durationMillis', 'distanceMeters', 'path', 'legs'].
-Travel Mode Setup: Map the UI modes precisely: car → 'DRIVE', bus → 'TRANSIT', walk → 'WALK', bicycle → 'BICYCLE'.
-Transit Requirements: If the mode is 'TRANSIT', you MUST include departureTime: new Date() as a top-level property of the request object.
-Extracting Bus Data: To get the exact bus, look at the response: result.routes[0].legs[0].steps. Find the step where travelMode === 'TRANSIT' and extract step.transitDetails. From this object, extract:
-busNumber: transitLine.name or transitLine.nameShort
-departureStop: stopDetails.departureStop.name
-arrivalStop: stopDetails.arrivalStop.name
-departureTime and arrivalTime.
-2. Map Rendering (GoogleMapView.tsx):
-Because we are using the new Routes API, we CANNOT use <DirectionsRenderer>.
-You must manually draw the route using standard components from @vis.gl/react-google-maps.
-Pass the path array returned by the API to a <Polyline> component to draw the route line.
-Place standard <AdvancedMarker> components at the startLocation and endLocation.
-3. Fix the Advanced Marker Warning:
-Wherever you are instantiating <gmp-pin> or PinElement, replace the deprecated glyph property with glyphText (e.g., glyphText: 'A').
-4. Fix CSS & Mobile UI:
-In TravelPortal.tsx and VerticalTimelineDay.tsx, fix the conflicting Tailwind classes by changing hidden sm:block flex to hidden sm:flex.
-Ensure the transit detail row in the timeline uses flex-wrap and truncate or whitespace-nowrap on text elements so the bus schedule doesn't overflow horizontally on mobile screens.
-5. Translation Fixes (data.ts):
-Add the missing keys exactly as follows to both en and cs dictionaries: syncing_sara, recent_trips, sidekick_woohoo, and transit_estimated.
-Replace the hardcoded "Expedition Est." in VerticalTimeline.tsx with t('transit_estimated').
-Please generate the exact updated code blocks for these components, ensuring you handle the computeRoutes Promise correctly.
+Can I have a Ahoj Sáro, prosím, mohli bychom spolu naplánovat výlet?
+
+Ahoj! Moc ráda pomůžu. Abychom začali, pověz mi, kam bys rád jel, na jak dlouho to vidíš a v jakém počtu cestujete? Jsou s tebou i nějaké děti, ať jim můžu navrhnout vhodnou aktivitu?
+
+Chtěla bych jet vlakem do Barcelony a v Barceloně bych se chtěla podívat na to nejlepší, co tam najdu. Speciálně mám ráda architekta Gaudího, takže bych chtěla vidět co nejvíc jeho staveb.
+
+To zní skvěle! Jednodenní výlet na Gaudího památky v Barceloně je super nápad. Vlakem se tam dostaneš pohodlně. Mám naplánovat itinerář zaměřený přímo na jeho slavná díla, jako je Sagrada Família, Park Güell a domy Casa Batlló a Casa Milà? Nebo bys chtěla vidět i něco jiného?
+
+No, ještě bych se chtěla podívat na Montjuïc.
+
+Rozumím! Přidáme Montjuïc do plánu. Bude to sice trochu nabitější den, ale dá se to stihnout. Chceš tedy raději nabitý itinerář, abys viděla co nejvíc, nebo zvolíme trochu volnější tempo?
+
+Necháme ten nabitý itinerář a uvidím, když tak to potom můžeme změnit.
+
+Dobře, jdu na to! Připravím nabitý itinerář s Gaudího památkami a Montjuïcem. Za chvilku to budeš mít před sebou.
+
+Ja, cool.
+
+Není zač! Už bys to měla vidět. Jak se ti to líbí, nebo chceš něco poupravit?
+
+Začni to plánovat, prosím tě.
+
+Jasně, už na tom pracuju! Připravuji nabitý itinerář zaměřený na Gaudího památky a Montjuïc, přesně jak jsme se domluvili. Dej mi chvíli a uvidíš to v celé kráse.
+

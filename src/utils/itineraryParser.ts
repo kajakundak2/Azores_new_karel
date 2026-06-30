@@ -282,9 +282,13 @@ export async function parseItineraryDocument(
 }
 
 /**
- * Generates a fresh itinerary (no document) using a two-step multi-agent architecture.
- * Step 1: Generate high-level outline.
- * Step 2: Extract day-by-day JSON details.
+ * Generates a fresh itinerary using a 3-agent multi-agent debate architecture:
+ *   Agent 1 — Architect: Creates a logically-routed day-by-day outline.
+ *   Agent 2 — Critic:    Reviews the outline, challenges weak choices, and produces
+ *                        an improved, refined plan with specific reasons.
+ *   Agent 3 — Detailer:  Expands each day of the final agreed plan into full POI JSON.
+ *
+ * This mirrors a real team discussion: propose → critique → finalize.
  */
 export async function generateItineraryFromScratch(
   destination: string,
@@ -300,183 +304,212 @@ export async function generateItineraryFromScratch(
   const end = new Date(endDate);
   const totalDays = Math.ceil((end.getTime() - start.getTime()) / (1000 * 3600 * 24)) + 1;
 
-  onProgress?.(`Planning ${totalDays}-day trip to ${destination}...`);
+  onProgress?.(`🏗️ Agent 1 (Architect): Designing ${totalDays}-day outline for ${destination}...`);
 
-  let apiKey = geminiKeyManager.getNextKey();
-  if (!apiKey) throw new Error('No API keys available.');
-  let ai = new GoogleGenAI({ apiKey });
+  const getKey = () => {
+    const key = geminiKeyManager.getNextKey();
+    if (!key) throw new Error('No API keys available.');
+    return key;
+  };
 
-  // Phase 1: High Level Outline
-  onProgress?.(`Phase 1: Generating high-level outline for ${totalDays} days...`);
-  let outline = '';
-  let outlineRetries = 0;
-  
-  while (outlineRetries < 3 && !outline) {
-    try {
-      const outlinePrompt = `Create a plain-text logically routed outline for a ${totalDays}-day trip to ${destination}. Do NOT output JSON.
-Travelers: ${travelers} people. Pace: ${intensity}.
-${referenceContext ? `REFERENCE CONTEXT & PREFERENCES:\n${referenceContext}\n` : ''}
-Format as:
-Day 1: [Theme]
-- Morning: [Activity]
-- Lunch: [Restaurant idea]
-...etc`;
-
-      const outlineResult = await ai.models.generateContent({
-        model: 'gemini-flash-lite-latest',
-        contents: [{ role: 'user', parts: [{ text: outlinePrompt }] }],
-        config: {
-          systemInstruction: "You are the trip architect. Draft a logically routed day-by-day plan. Ensure each full day has enough activities according to the pace and 2-3 specific real-world restaurants.",
-          temperature: 0.7
+  const callGemini = async (
+    systemInstruction: string,
+    userPrompt: string,
+    temperature: number,
+    useJson = false,
+    retries = 6
+  ): Promise<string> => {
+    let attempt = 0;
+    while (attempt < retries) {
+      const apiKey = getKey();
+      try {
+        const ai = new GoogleGenAI({ apiKey });
+        const result = await ai.models.generateContent({
+          model: 'gemini-flash-lite-latest',
+          contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
+          config: {
+            systemInstruction,
+            temperature,
+            ...(useJson ? { responseMimeType: 'application/json' } : {})
+          }
+        });
+        return result.text || '';
+      } catch (err: any) {
+        const isLeaked = err.message?.toLowerCase().includes('leaked') || err.message?.includes('403');
+        if (isLeaked) {
+          geminiKeyManager.markKeyFailed(apiKey, true, 60, true);
+        } else if (err.message?.includes('429') || err.message?.includes('503') || err.message?.includes('fetch failed')) {
+          geminiKeyManager.markKeyFailed(apiKey, true, 60);
+          await delay(2000 * Math.pow(2, attempt) + Math.random() * 1000);
+        } else {
+          await delay(1000);
         }
-      });
-      outline = outlineResult.text || '';
-    } catch (err: any) {
-      console.error('Outline generation error:', err);
-      const isLeaked = err.message?.toLowerCase().includes('leaked') || err.message?.includes('403');
-      if (isLeaked) {
-        geminiKeyManager.markKeyFailed(apiKey, true, 60, true);
-        apiKey = geminiKeyManager.getNextKey();
-        if (!apiKey) throw new Error('Quota exhausted or service unavailable during outline Phase 1.');
-        ai = new GoogleGenAI({ apiKey });
-        outlineRetries++;
-        await delay(1000);
-        continue;
+        attempt++;
+        if (attempt >= retries) throw err;
       }
-      if (err.message?.includes('429') || err.message?.includes('503')) {
-        geminiKeyManager.markKeyFailed(apiKey, true, 60);
-        apiKey = geminiKeyManager.getNextKey();
-        if (!apiKey) throw new Error('Quota exhausted or service unavailable during outline Phase 1.');
-        ai = new GoogleGenAI({ apiKey });
-      }
-      outlineRetries++;
-      await delay(2000 * outlineRetries);
     }
-  }
+    throw new Error('Max retries exceeded.');
+  };
 
-  if (!outline) throw new Error('Failed to generate high-level outline after retries.');
+  // ── Agent 1: Architect ───────────────────────────────────────────────────────
+  const architectPrompt = `You are the TRIP ARCHITECT. Your job is to design the FIRST DRAFT of a ${totalDays}-day trip to ${destination}.
 
-  // Phase 2: Day details
+Travelers: ${travelers} people. Pace: ${intensity}.
+${referenceContext ? `PREFERENCES & CONTEXT:\n${referenceContext}\n` : ''}
+RULES:
+- Route logically to minimize backtracking each day.
+- Allocate 2-3 REAL specific restaurants per day (breakfast, lunch, dinner).
+- Balance sightseeing, nature, local culture, and food.
+- Adjust activity density to the pace (relaxed = fewer, packed = more).
+- DO NOT output JSON. Plain text only.
+
+Output format:
+Day 1: [Theme]
+- Morning: [Activity with brief rationale]
+- Lunch: [Restaurant name]
+- Afternoon: [Activity]
+- Dinner: [Restaurant name]
+...`;
+
+  const architectOutline = await callGemini(
+    'You are an expert travel architect. Create a first-draft itinerary outline. Plain text only, no JSON.',
+    architectPrompt,
+    0.75
+  );
+  console.log('[MultiAgent] Architect outline (first 500 chars):', architectOutline.substring(0, 500));
+
+  // ── Agent 2: Critic ──────────────────────────────────────────────────────────
+  onProgress?.(`🔍 Agent 2 (Critic): Reviewing and improving the plan...`);
+  await delay(800);
+
+  const criticPrompt = `You are the TRIP CRITIC. You have received the following first-draft itinerary for a ${totalDays}-day trip to ${destination}.
+
+FIRST DRAFT:
+---
+${architectOutline}
+---
+
+Travelers: ${travelers} people. Pace: ${intensity}.
+${referenceContext ? `USER PREFERENCES:\n${referenceContext}\n` : ''}
+YOUR TASK: Critically review the draft and produce an IMPROVED version. You MUST:
+1. Identify at least 3 weaknesses (e.g., poor routing, generic restaurants, too many activities for the pace, missed key local experiences).
+2. Fix each weakness in the improved plan.
+3. Ensure the improved plan is realistic and logistically sound.
+4. Keep real, specific place names and restaurants.
+
+Output format:
+CRITIQUE:
+- [Issue 1]: [Fix applied]
+- [Issue 2]: [Fix applied]
+- [Issue 3]: [Fix applied]
+
+IMPROVED PLAN:
+Day 1: [Theme]
+- Morning: ...
+...`;
+
+  const criticResponse = await callGemini(
+    'You are an expert travel critic and editor. Identify weaknesses and produce a stronger, refined travel plan. Plain text only.',
+    criticPrompt,
+    0.6
+  );
+  console.log('[MultiAgent] Critic response (first 500 chars):', criticResponse.substring(0, 500));
+
+  // Extract the improved plan from the critic output
+  const improvedPlanMatch = criticResponse.match(/IMPROVED PLAN[:\s\n]+([\s\S]+)/i);
+  const finalOutline = improvedPlanMatch ? improvedPlanMatch[1].trim() : criticResponse;
+  console.log('[MultiAgent] Final agreed plan (first 500 chars):', finalOutline.substring(0, 500));
+
+  // ── Agent 3: Detailer (per-day) ──────────────────────────────────────────────
   const results: ParsedDay[] = [];
   const daysToProcess = targetDayNumbers || Array.from({ length: totalDays }, (_, i) => i + 1);
 
   for (const dayNum of daysToProcess) {
-    onProgress?.(`Phase 2: Planning Day ${dayNum} of ${totalDays}...`);
+    onProgress?.(`📋 Agent 3 (Detailer): Expanding Day ${dayNum} of ${totalDays} into full schedule...`);
 
-    let retryCount = 0;
-    const maxRetries = 6;
-    let dayResult: ParsedDay | null = null;
+    const detailerPrompt = `You are the TRIP DETAILER. The planning team has agreed on the following trip outline:
 
-    while (!dayResult && retryCount < maxRetries) {
-      apiKey = geminiKeyManager.getNextKey();
-      if (!apiKey) throw new Error('No API keys available.');
+${finalOutline}
 
-      try {
-        ai = new GoogleGenAI({ apiKey });
-        
-        const prompt = `Here is the high-level outline for the trip to ${destination}:
-
-${outline}
-
-Extract and expand the details for DAY ${dayNum} ONLY.
+Your task is to FULLY EXPAND Day ${dayNum} into a complete, detailed schedule.
 
 CONTEXT:
-Travelers: ${travelers}
-Intensity: ${intensity}
+- Destination: ${destination}
+- Travelers: ${travelers}
+- Intensity: ${intensity}
 ${referenceContext}
 
-REQUIREMENTS:
-- Extract or plan EVERY activity, restaurant, and viewpoint for this day.
-- Include FOOD stops (breakfast, lunch, dinner, snacks).
-- SMART SCHEDULING: Allocate realistic duration times (e.g., 2 hours for a hike, 90 mins for lunch).
-- Logically order activities by start time, accounting for transit!
-- MUST output REAL PLACES ONLY with realistic GPS coordinates (lat/lng).
-- Include approximate costs (e.g. "€15", "free").
-- CRITICAL SCHEDULING: Provide a sequentially increasing "startTime" (e.g., "09:00", "11:00", "14:30") for EVERY activity. Calculate start times so they account for the previous activity's duration and transit. NEVER schedule multiple activities at the same time!
-- Duration in minutes.
+REQUIREMENTS FOR DAY ${dayNum}:
+1. Extract or plan EVERY activity, restaurant, and viewpoint.
+2. Include breakfast, lunch, dinner, and snack stops.
+3. SMART SCHEDULING: Each activity gets a sequential "startTime" in "HH:MM" 24h format (e.g., "09:00", "11:30"). Account for duration and transit. NEVER two activities at the same time.
+4. Duration in minutes: viewpoints=20, museums=60-90, hikes=90-180, meals=45-75, beaches=120.
+5. REAL PLACES ONLY — realistic GPS coordinates (lat/lng) for the destination area.
+6. Include approximate costs ("€15", "free", etc.).
+7. BILINGUAL: ALL text in both English (en) and Czech (cs).
+8. Category: use ONLY "Sightseeing", "Food", "Activity", "Transport", "Special", "City".
 
 Return ONLY valid JSON:
 {
   "dayNumber": ${dayNum},
-  "title": { "en": "Day Title", "cs": "Název dne" },
+  "title": { "en": "Day Title", "cs": "Nazev dne" },
   "activities": [
     {
-      "title": { "en": "Place Name", "cs": "Název místa" },
-      "description": { "en": "Expert description...", "cs": "Detailní popis..." },
-      "category": "Sightseeing"|"Food"|"Activity"|"Transport"|"Special"|"City",
-      "cost": "€10",
+      "title": { "en": "Exact Place Name", "cs": "Presny nazev mista" },
+      "description": { "en": "Engaging 2-3 sentence description.", "cs": "Poutavy 2-3 vetny popis." },
+      "category": "Sightseeing",
+      "cost": "12 EUR",
       "startTime": "09:00",
       "duration": 60,
-      "address": "Area Name",
-      "practicalTips": { "en": "Tip...", "cs": "Tip..." },
+      "address": "Street or area name",
+      "practicalTips": { "en": "Specific tip", "cs": "Specificky tip" },
       "coords": { "lat": 37.123, "lng": -25.456 },
-      "imageKeyword": "photo search term"
+      "imageKeyword": "descriptive photo search term"
     }
   ],
-  "dayNotes": { "en": "Notes...", "cs": "Poznámky..." }
+  "dayNotes": { "en": "Overall day tips", "cs": "Celkove tipy pro den" }
 }`;
 
-        const result = await ai.models.generateContent({
-          model: 'gemini-flash-lite-latest',
-          contents: [{ role: 'user', parts: [{ text: prompt }] }],
-          config: {
-            systemInstruction: 'You are an expert trip detailer. Output strictly valid JSON. YOU MUST OUTPUT REAL PLACES ONLY. PLAN SMARTLY.',
-            temperature: 0.4,
-            responseMimeType: 'application/json'
-          }
-        });
+    let dayResult: ParsedDay | null = null;
+    let retryCount = 0;
+    const maxRetries = 6;
 
-        let text = result.text || '';
-        text = stripCodeFences(text);
-        console.log(`[ItineraryParser] RAW Output for generated Day ${dayNum}:`, text);
-        dayResult = JSON.parse(text.trim()) as ParsedDay;
-        
+    while (!dayResult && retryCount < maxRetries) {
+      try {
+        const raw = await callGemini(
+          'You are an expert trip detailer. Output ONLY valid JSON. Include REAL places with correct coordinates for the destination. NEVER invent fake places.',
+          detailerPrompt,
+          0.4,
+          true
+        );
+        const cleaned = stripCodeFences(raw);
+        console.log(`[MultiAgent] Detailer Day ${dayNum} raw (first 300):`, cleaned.substring(0, 300));
+        dayResult = JSON.parse(cleaned.trim()) as ParsedDay;
       } catch (err: any) {
-        console.error(`Generation error (Day ${dayNum}):`, err);
-        const isLeaked = err.message?.toLowerCase().includes('leaked') || err.message?.includes('403');
-        if (isLeaked) {
-          geminiKeyManager.markKeyFailed(apiKey, true, 60, true);
-          retryCount++;
-          await delay(1000);
-          continue;
-        }
-        if (err.message?.includes('429') || err.message?.includes('503') || err.message?.includes('fetch failed')) {
-          geminiKeyManager.markKeyFailed(apiKey, true, 60);
-          retryCount++;
-          const backoff = 2000 * Math.pow(2, retryCount);
-          await delay(backoff);
-        } else {
-          retryCount++;
-          await delay(1000);
-        }
+        console.error(`[MultiAgent] Detailer Day ${dayNum} error:`, err);
+        retryCount++;
+        await delay(1500 * retryCount);
       }
     }
 
-    if (dayResult) {
-      results.push(dayResult);
-    } else {
-      results.push({
-        dayNumber: dayNum,
-        title: { en: `Day ${dayNum}`, cs: `Den ${dayNum}` },
-        activities: [],
-        dayNotes: { en: 'Failed to generate.', cs: 'Nepodařilo se vygenerovat.' }
-      });
-    }
+    results.push(dayResult || {
+      dayNumber: dayNum,
+      title: { en: `Day ${dayNum}`, cs: `Den ${dayNum}` },
+      activities: [],
+      dayNotes: { en: 'Generation failed for this day — please retry.', cs: 'Generovani pro tento den selhalo — zkuste znovu.' }
+    });
 
-    if (dayNum < totalDays) {
+    if (dayNum < daysToProcess[daysToProcess.length - 1]) {
       await delay(1000);
     }
   }
 
-  onProgress?.(`Generation complete: ${results.reduce((sum, d) => sum + d.activities.length, 0)} total activities.`);
+  const totalActivities = results.reduce((sum, d) => sum + d.activities.length, 0);
+  onProgress?.(`✅ Multi-agent planning complete: ${totalActivities} activities across ${results.length} days.`);
   return results;
 }
 
-// ── Conversion: ParsedDay[] → POI[] ready for itinerary ──────────────────────
 
-/**
- * Converts a ParsedDay into an array of POIs keyed by ISO date.
- */
 export function parsedDaysToItinerary(
   days: ParsedDay[],
   tripStartDate: string

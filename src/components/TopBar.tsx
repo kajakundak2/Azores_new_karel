@@ -59,12 +59,16 @@ export const TopBar: React.FC<TopBarProps> = ({
         {/* Trip Title & Destination */}
         <div className="flex flex-col min-w-0 max-w-[120px] sm:max-w-[200px]">
           <input 
+            id="topbar-trip-title"
+            name="topbar-trip-title"
             value={trip.title || ''}
             placeholder={t('topbar_trip_title_placeholder')}
             onChange={(e) => onUpdate({ title: e.target.value })}
             className={`text-[10px] sm:text-xs font-black uppercase tracking-tighter bg-transparent border-none p-0 outline-none focus:text-emerald-400 truncate ${theme === 'dark' ? 'text-white' : 'text-slate-900'}`}
           />
           <input 
+            id="topbar-destination"
+            name="topbar-destination"
             value={trip.destination || ''}
             placeholder={t('topbar_destination_placeholder')}
             onChange={(e) => onUpdate({ destination: e.target.value })}
@@ -80,6 +84,8 @@ export const TopBar: React.FC<TopBarProps> = ({
             <Calendar className="w-3 h-3 text-emerald-500" />
             <div className="flex items-center gap-1">
               <input 
+                id="topbar-start-date"
+                name="topbar-start-date"
                 type="date"
                 value={trip.startDate}
                 onChange={(e) => onUpdate({ startDate: e.target.value })}
@@ -87,6 +93,8 @@ export const TopBar: React.FC<TopBarProps> = ({
               />
               <span className="text-[10px] text-white/20">—</span>
               <input 
+                id="topbar-end-date"
+                name="topbar-end-date"
                 type="date"
                 value={trip.endDate}
                 onChange={(e) => onUpdate({ endDate: e.target.value })}

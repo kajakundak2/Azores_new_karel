@@ -86,6 +86,8 @@ export const LibraryPanel: React.FC<LibraryPanelProps> = ({
             <h4 className="text-[9px] font-black uppercase tracking-[0.2em] text-emerald-400 mb-2">{t('search_places_title')}</h4>
              <form onSubmit={e => { e.preventDefault(); const q = activeTrip?.destination ? `${atlasQuery} in ${activeTrip.destination}` : atlasQuery; doAtlasSearch(q, undefined, searchInBounds); }} className="flex gap-2">
                <input 
+                 id="library-search"
+                 name="library-search"
                  type="text"
                  value={atlasQuery}
                  onChange={e => setAtlasQuery(e.target.value)}
@@ -101,7 +103,7 @@ export const LibraryPanel: React.FC<LibraryPanelProps> = ({
               </button>
             </form>
             <label className="flex items-center gap-2 mt-2">
-              <input type="checkbox" checked={searchInBounds} onChange={e => setSearchInBounds(e.target.checked)} className="accent-emerald-500" />
+              <input id="library-search-in-bounds" name="library-search-in-bounds" type="checkbox" checked={searchInBounds} onChange={e => setSearchInBounds(e.target.checked)} className="accent-emerald-500" />
               <span className="text-[9px] text-emerald-400 font-bold uppercase">{t('search_visible_only')}</span>
             </label>
           </div>
