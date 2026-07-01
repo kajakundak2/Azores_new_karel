@@ -354,13 +354,16 @@ ${activeTrip.originalRequest ? `USER INITIAL REQUEST: ${activeTrip.originalReque
       await clearItinerary();
       replyText = { en: 'The entire itinerary has been cleared.', cs: 'Celý itinerář byl vymazán.' };
     } else if (name === 'update_itinerary') {
-      // Detect if the request involves full-day replanning → use multi-agent pipeline
+      // Detect if the request involves full-trip or full-day replanning → use multi-agent pipeline
       const req = (args.request || '').toLowerCase();
-      const isDayReplan = /\b(replan|přeplánuj|naplánuj|plan|replánuj|předělej|redo|regenerate|create|vytvoř).*(day|den|celý den|whole day|entire day|all activities|trip|výlet)/i.test(req)
+      // Multi-agent triggers: explicit replan verbs, improvement requests, or multi-agent mention
+      const isFullTripImprove = /\b(lepší|better|improve|vylepš|předělej|udělej lepší|make.*better|oprav|regenerate|multi.?agent|víceagentní)/i.test(req);
+      const isDaySpecificReplan = /\b(replan|přeplánuj|naplánuj|plan|replánuj|redo|regenerate|create|vytvoř).*(day|den|celý den|whole day|entire day|all activities|trip|výlet)/i.test(req)
         || /\b(day|den)\s*\d+.*(replan|přeplánuj|naplánuj|předělej|redo|regenerate|from scratch|znovu)/i.test(req);
+      const isDayReplan = isFullTripImprove || isDaySpecificReplan;
 
       if (isDayReplan) {
-        // Extract day numbers from the request
+        // Extract day numbers from the request (if specific days mentioned)
         const dayMatches = req.match(/(?:day|den)\s*(\d+)/gi);
         const dayNums = dayMatches
           ? dayMatches.map(m => parseInt(m.replace(/\D/g, ''))).filter(n => !isNaN(n))
@@ -481,7 +484,7 @@ ${activeTrip.originalRequest ? `USER INITIAL REQUEST: ${activeTrip.originalReque
       const { updatedItinerary, summary } = await applyItineraryUpdate(
         itinerary,
         request,
-        activeTrip.destination,
+        activeTrip,
         (msg) => setNotification(`🤖 ${msg}`)
       );
       await updateTrip(activeTripId, { itinerary: updatedItinerary });
