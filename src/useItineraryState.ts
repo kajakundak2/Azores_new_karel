@@ -71,13 +71,33 @@ export function syncStaysToItinerary(stays: any[], itinerary: Record<string, POI
     
     // 1. Remove all old stay markers (identified by ID prefix)
     for (const date in newItinerary) {
-        newItinerary[date] = newItinerary[date].filter(poi => !poi.id.startsWith('stay-marker-'));
+        newItinerary[date] = newItinerary[date].filter(poi => 
+            !poi.id.startsWith('stay-marker-') &&
+            !poi.id.startsWith('checkin-stay-') &&
+            !poi.id.startsWith('checkout-stay-')
+        );
     }
     
     // 2. Add new stay markers
     stays.forEach(stay => {
         let current = parseDateString(stay.checkInDate);
         const checkOut = parseDateString(stay.checkOutDate);
+        
+        // Add Check-in marker
+        const checkInIso = toLocalIso(current);
+        if (!newItinerary[checkInIso]) newItinerary[checkInIso] = [];
+        newItinerary[checkInIso].push({
+            id: `checkin-${stay.id}`,
+            title: { en: `Check-in: ${stay.name}`, cs: `Check-in: ${stay.name}` },
+            category: 'Special',
+            fixed: true,
+            time: '15:00',
+            duration: 30,
+            imageUrl: stay.imageUrl,
+            location: stay.location,
+            description: { en: `Check-in time`, cs: `Čas příjezdu` },
+            address: stay.address
+        });
         
         while (current <= checkOut) {
             const iso = toLocalIso(current);
@@ -102,6 +122,22 @@ export function syncStaysToItinerary(stays: any[], itinerary: Record<string, POI
             }
             current.setDate(current.getDate() + 1);
         }
+
+        // Add Check-out marker
+        const checkOutIso = toLocalIso(checkOut);
+        if (!newItinerary[checkOutIso]) newItinerary[checkOutIso] = [];
+        newItinerary[checkOutIso].push({
+            id: `checkout-${stay.id}`,
+            title: { en: `Check-out: ${stay.name}`, cs: `Check-out: ${stay.name}` },
+            category: 'Special',
+            fixed: true,
+            time: '10:00',
+            duration: 30,
+            imageUrl: stay.imageUrl,
+            location: stay.location,
+            description: { en: `Check-out time`, cs: `Čas odjezdu` },
+            address: stay.address
+        });
     });
     
     return newItinerary;

@@ -10,7 +10,6 @@ interface StaysManagerProps {
   currency: 'EUR' | 'CZK' | 'USD';
   rates: Record<string, number>;
   onUpdate: (stays: Stay[]) => Promise<void>;
-  onAddStayToItinerary?: (stay: Stay) => void;
   onClose: () => void;
   apiKey: string;
   theme?: 'light' | 'dark';
@@ -23,7 +22,7 @@ const STAY_TYPE_ICONS: Record<string, any> = {
   other: House,
 };
 
-export function StaysManager({ trip, lang, currency, rates, onUpdate, onAddStayToItinerary, onClose, apiKey, theme = 'dark' }: StaysManagerProps) {
+export function StaysManager({ trip, lang, currency, rates, onUpdate, onClose, apiKey, theme = 'dark' }: StaysManagerProps) {
   const [stays, setStays] = useState<Stay[]>(trip.logistics?.stays || []);
   const [isAdding, setIsAdding] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -72,7 +71,6 @@ export function StaysManager({ trip, lang, currency, rates, onUpdate, onAddStayT
       pricePerNight: 0,
     };
     setStays([...stays, newStay]);
-    if (onAddStayToItinerary) onAddStayToItinerary(newStay);
     setIsAdding(false);
     setSearchQuery('');
     setSearchResults([]);

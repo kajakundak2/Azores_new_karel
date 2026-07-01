@@ -408,10 +408,7 @@ export const TravelPortal: React.FC<TravelPortalProps> = ({
             <div className="fixed inset-0 z-[400] flex items-center justify-center p-4">
               <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-md" onClick={() => setShowStaysManager(false)} />
               <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative z-10 w-full max-w-5xl">
-                 <StaysManager trip={activeTrip} lang={lang} currency={currency} rates={rates} apiKey={mapsApiKey} onUpdate={async (stays) => { const updatedItinerary = syncStaysToItinerary(stays, activeTrip.itinerary || {}); await updateTrip(activeTrip.id, { itinerary: updatedItinerary, logistics: { ...activeTrip.logistics, stays } }); }} onAddStayToItinerary={(stay) => {
-                   addPoi(stay.checkInDate, { id: `checkin-${stay.id}`, title: { en: `Check-in: ${stay.name}`, cs: `Check-in: ${stay.name}` }, category: 'Special', fixed: true, time: '15:00', duration: 30, imageUrl: stay.imageUrl, location: stay.location, description: { en: `Check-in time`, cs: `Čas příjezdu` }, address: stay.address });
-                   addPoi(stay.checkOutDate, { id: `checkout-${stay.id}`, title: { en: `Check-out: ${stay.name}`, cs: `Check-out: ${stay.name}` }, category: 'Special', fixed: true, time: '10:00', duration: 30, imageUrl: stay.imageUrl, location: stay.location, description: { en: `Check-out time`, cs: `Čas odjezdu` }, address: stay.address });
-                 }} onClose={() => setShowStaysManager(false)} theme={theme} />
+                 <StaysManager trip={activeTrip} lang={lang} currency={currency} rates={rates} apiKey={mapsApiKey} onUpdate={async (stays) => { const updatedItinerary = syncStaysToItinerary(stays, activeTrip.itinerary || {}); await updateTrip(activeTrip.id, { itinerary: updatedItinerary, logistics: { ...activeTrip.logistics, stays } }); }} onClose={() => setShowStaysManager(false)} theme={theme} />
               </motion.div>
             </div>
           )}
