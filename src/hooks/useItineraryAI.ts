@@ -89,7 +89,7 @@ export function useItineraryAI({
     return getFullTripContext(activeTrip, itinerary) + '\n' + SARA_CAPABILITIES_PROMPT;
   }, [activeTrip, itinerary]);
 
-  const handleSmartGeneration = useCallback(async (intensityValue: string = 'balanced', targetDayNumbers?: number[]) => {
+  const handleSmartGeneration = useCallback(async (intensityValue: string = 'balanced', targetDayNumbers?: number[], userRequest?: string) => {
     if (!activeTrip) return;
     
     const intensity = (['relaxed', 'balanced', 'packed'].includes(intensityValue) ? intensityValue : 'balanced') as 'relaxed' | 'balanced' | 'packed';
@@ -160,7 +160,17 @@ ${activeTrip.originalRequest ? `USER INITIAL REQUEST: ${activeTrip.originalReque
         checkpoint = { completedDays: [], intensity: intensityValue, totalDays };
       }
 
+      let forceMultiAgent = false;
       if (hasReferenceDocs) {
+         const req = (userRequest || activeTrip.originalRequest || '').toLowerCase();
+         // If they mention improvement, replanning, editing, removing, adding, we force multi-agent
+         const wantsModifications = /\b(lepší|better|improve|vylepš|předělej|udělej lepší|make.*better|oprav|regenerate|multi.?agent|víceagentní|replan|přeplánuj|naplánuj|plan|replánuj|redo|create|vytvoř|změň|change|přidej|add|remove|odstraň|dej pryč)\b/i.test(req);
+         if (wantsModifications) {
+            forceMultiAgent = true;
+         }
+      }
+
+      if (hasReferenceDocs && !forceMultiAgent) {
         const fullDocText = activeTrip.referenceDocs!.map((d: any) => d.content).join('\n\n---\n\n');
         parsedDays = await parseItineraryDocument(
           fullDocText + '\n\n' + tripMetadataContext,
@@ -170,13 +180,21 @@ ${activeTrip.originalRequest ? `USER INITIAL REQUEST: ${activeTrip.originalReque
           targetDayNumbers
         );
       } else {
+        let enhancedContext = tripMetadataContext;
+        if (hasReferenceDocs) {
+           enhancedContext += '\n\nUSER ATTACHED DOCUMENTS FOR CONTEXT (Do not just copy, use as ideas/context):\n' + activeTrip.referenceDocs!.map((d: any) => d.content).join('\n\n---\n\n');
+        }
+        if (userRequest) {
+           enhancedContext += `\n\nUSER'S LATEST INSTRUCTIONS: ${userRequest}\n(Make sure to follow these instructions closely when planning.)`;
+        }
+
         parsedDays = await generateItineraryFromScratch(
           activeTrip.destination,
           activeTrip.startDate,
           activeTrip.endDate,
           activeTrip.travelers,
           intensity,
-          tripMetadataContext,
+          enhancedContext,
           onProgress,
           targetDayNumbers
         );
@@ -305,7 +323,7 @@ ${activeTrip.originalRequest ? `USER INITIAL REQUEST: ${activeTrip.originalReque
   }, [activeTrip, activeTripId, lang, addPoi, setNotification, t, clearDay, searchPlacesAsync]);
 
   // Unified tool call handler for both text chat and voice chat
-  const handleToolCall = useCallback(async (name: string, args: any) => {
+  const handleToolCall = useCallback(async (name: string, args: any, currentRequest?: string) => {
     if (!activeTrip) throw new Error("No active trip");
     
     let replyText: BilingualString = { en: 'Executing...', cs: 'Provádím...' };
@@ -344,7 +362,7 @@ ${activeTrip.originalRequest ? `USER INITIAL REQUEST: ${activeTrip.originalReque
         replyText = { en: msgEn, cs: msgCs };
         console.warn(`[Tool:trigger_smart_itinerary_generation] Blocked. Missing: ${missingFields.join(', ')}`);
       } else {
-        handleSmartGeneration(args.intensity || 'balanced', args.dayNumbers);
+        handleSmartGeneration(args.intensity || 'balanced', args.dayNumbers, currentRequest);
         replyText = { en: 'Smart generation started.', cs: 'Chytré generování spuštěno.' };
       }
     } else if (name === 'clear_day') {
@@ -369,7 +387,7 @@ ${activeTrip.originalRequest ? `USER INITIAL REQUEST: ${activeTrip.originalReque
           ? dayMatches.map(m => parseInt(m.replace(/\D/g, ''))).filter(n => !isNaN(n))
           : undefined;
         console.log(`[Tool:update_itinerary] Detected replanning → multi-agent pipeline for days: ${dayNums?.join(',') || 'all'}`);
-        handleSmartGeneration(args.intensity || 'balanced', dayNums && dayNums.length > 0 ? dayNums : undefined);
+        handleSmartGeneration(args.intensity || 'balanced', dayNums && dayNums.length > 0 ? dayNums : undefined, args.request || currentRequest);
         replyText = { en: 'Multi-agent replanning started...', cs: 'Vícestupňové přeplánování spuštěno...' };
       } else if (args.request) {
         handleItineraryUpdate(args.request);
@@ -583,7 +601,7 @@ ALWAYS respond in this JSON format. Never respond in plain text.`;
         if (result.functionCalls && result.functionCalls.length > 0) {
           const fc = result.functionCalls[0];
           const args = (fc.args || {}) as any;
-          const { replyText, uiCards } = await handleToolCall(fc.name, args);
+          const { replyText, uiCards } = await handleToolCall(fc.name, args, userMsg);
 
           setMessages(prev => [...prev, { role: 'model', text: replyText, uiCards }]);
         } else {
