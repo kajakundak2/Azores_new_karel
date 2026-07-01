@@ -62,7 +62,7 @@ export function getToolDeclarations(destination: string = 'the destination') {
     },
     {
       name: 'update_itinerary',
-      description: 'Powerful AI agent for complex, bulk, or conditional itinerary changes. Use this when the user wants to: replan multiple days, swap days, add/remove activities based on conditions (e.g. "add lunch everywhere", "remove all hikes", "make day 3 more relaxed"), reorganize the whole trip, or any multi-step modification. Pass the full natural-language request.',
+      description: 'Powerful AI agent for complex, bulk, or conditional itinerary changes. Automatically uses multi-agent planning for full-day replanning (e.g., "replan day 3", "redo the whole trip"). Use when the user wants to: replan days, swap days, add/remove activities based on conditions (e.g. "add lunch everywhere", "remove all hikes", "make day 3 more relaxed"), reorganize the whole trip, or any multi-step modification. Pass the full natural-language request.',
       parameters: {
         type: 'OBJECT',
         properties: { request: { type: 'STRING', description: 'The full natural-language modification request from the user.' } },
@@ -347,6 +347,15 @@ RULES:
 - CRITICAL: When the user gives you information (preferences, traveler details, constraints) or asks you to plan, generate, add, remove, or modify something, you MUST immediately call the corresponding tool/function (e.g. update_trip_details, set_traveler_profiles, trigger_smart_itinerary_generation).
 - DO NOT just verbally acknowledge or promise to do it ("I am working on it", "I have noted that"). You must ALWAYS execute the tool call in the exact same turn. Your spoken/text reply MUST be accompanied by the tool call.
 - Be proactive: if the user mentions they love hiking, call update_trip_details to save that preference. If they mention going with a child, call set_traveler_profiles and update_trip_details. TAKE NOTES by updating the system state immediately.
+
+RESUME / CONTINUE:
+- If the user says "continue", "pokračuj", "dokonči", "finish it", or similar, and there was an interrupted generation, call trigger_smart_itinerary_generation (with NO arguments) to resume from the checkpoint.
+- The system automatically tracks which days were completed. Calling the tool without dayNumbers will resume remaining days.
+- If the user says "redo" or "regenerate" a specific day, use trigger_smart_itinerary_generation with that day number.
+
+MULTI-AGENT REPLANNING:
+- When the user asks to replan an entire day or multiple days from scratch (e.g., "replan day 5", "redo the whole trip", "přeplánuj den 3"), use update_itinerary — it will automatically dispatch to the multi-agent pipeline.
+- For smaller changes (swap two activities, change a restaurant), use the specific atomic tools instead.
 `;
 
 /**

@@ -20,6 +20,14 @@ import { ensureBilingual, stripCodeFences } from './bilingualUtils';
 
 import { BilingualString, ParsedPOI, ParsedDay, SplitterResult } from './types';
 
+const genAIClients = new Map<string, GoogleGenAI>();
+function getGenAIClient(apiKey: string) {
+  if (!genAIClients.has(apiKey)) {
+    genAIClients.set(apiKey, new GoogleGenAI({ apiKey }));
+  }
+  return genAIClients.get(apiKey)!;
+}
+
 export type ProgressCallback = (message: string) => void;
 
 // ── Step A: The Splitter ─────────────────────────────────────────────────────
@@ -43,7 +51,7 @@ export async function splitDocument(
     if (!apiKey) throw new Error('No API keys available.');
 
     try {
-      const ai = new GoogleGenAI({ apiKey });
+      const ai = getGenAIClient(apiKey);
       
       const prompt = `You are a document structure analyzer. Your ONLY job is to split this travel document into individual day chunks.
 
@@ -142,7 +150,7 @@ export async function extractDayPOIs(
     if (!apiKey) throw new Error('No API keys available.');
 
     try {
-      const ai = new GoogleGenAI({ apiKey });
+      const ai = getGenAIClient(apiKey);
       
       const prompt = `You are an exhaustive travel data extractor. Your job is to extract EVERY SINGLE point of interest, restaurant, viewpoint, beach, activity, and transit step from this day's text with ZERO summarization.
 
@@ -317,32 +325,47 @@ export async function generateItineraryFromScratch(
     userPrompt: string,
     temperature: number,
     useJson = false,
-    retries = 6
+    retries = 8
   ): Promise<string> => {
     let attempt = 0;
     while (attempt < retries) {
       const apiKey = getKey();
       try {
-        const ai = new GoogleGenAI({ apiKey });
-        const result = await ai.models.generateContent({
+        const ai = getGenAIClient(apiKey);
+        // Race against a 90-second timeout to prevent infinite hangs
+        const timeoutMs = 90_000;
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        const resultPromise = ai.models.generateContent({
           model: 'gemini-flash-lite-latest',
           contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
           config: {
             systemInstruction,
             temperature,
-            ...(useJson ? { responseMimeType: 'application/json' } : {})
+            ...(useJson ? { responseMimeType: 'application/json' } : {}),
+            httpOptions: { signal: controller.signal } as any
           }
         });
+        const result = await resultPromise;
+        clearTimeout(timer);
         return result.text || '';
       } catch (err: any) {
-        const isLeaked = err.message?.toLowerCase().includes('leaked') || err.message?.includes('403');
+        const msg = err.message || '';
+        const isLeaked = msg.toLowerCase().includes('leaked') || msg.includes('403');
+        const isRetryable = msg.includes('429') || msg.includes('503')
+          || msg.includes('Failed to fetch') || msg.includes('fetch failed')
+          || msg.includes('INSUFFICIENT_RESOURCES') || msg.includes('AbortError')
+          || msg.includes('aborted') || msg.includes('network');
         if (isLeaked) {
           geminiKeyManager.markKeyFailed(apiKey, true, 60, true);
-        } else if (err.message?.includes('429') || err.message?.includes('503') || err.message?.includes('fetch failed')) {
-          geminiKeyManager.markKeyFailed(apiKey, true, 60);
-          await delay(2000 * Math.pow(2, attempt) + Math.random() * 1000);
+        } else if (isRetryable) {
+          geminiKeyManager.markKeyFailed(apiKey, true, 30);
+          // Exponential backoff with jitter, capped at 30s
+          const backoff = Math.min(3000 * Math.pow(1.8, attempt), 30_000) + Math.random() * 2000;
+          console.warn(`[MultiAgent] Retryable error (attempt ${attempt + 1}/${retries}), waiting ${(backoff / 1000).toFixed(1)}s:`, msg.substring(0, 120));
+          await delay(backoff);
         } else {
-          await delay(1000);
+          await delay(1500);
         }
         attempt++;
         if (attempt >= retries) throw err;
@@ -351,8 +374,12 @@ export async function generateItineraryFromScratch(
     throw new Error('Max retries exceeded.');
   };
 
+  const isPartial = targetDayNumbers && targetDayNumbers.length > 0;
+  const targetDaysStr = isPartial ? targetDayNumbers!.join(', ') : `1 to ${totalDays}`;
+
   // ── Agent 1: Architect ───────────────────────────────────────────────────────
-  const architectPrompt = `You are the TRIP ARCHITECT. Your job is to design the FIRST DRAFT of a ${totalDays}-day trip to ${destination}.
+  const architectPrompt = `You are the TRIP ARCHITECT. Your job is to design the FIRST DRAFT of a trip to ${destination}.
+${isPartial ? `CRITICAL: You are ONLY replanning Day(s) ${targetDaysStr}. Do NOT plan any other days.` : `Plan all days from 1 to ${totalDays}.`}
 
 Travelers: ${travelers} people. Pace: ${intensity}.
 ${referenceContext ? `PREFERENCES & CONTEXT:\n${referenceContext}\n` : ''}
@@ -361,10 +388,11 @@ RULES:
 - Allocate 2-3 REAL specific restaurants per day (breakfast, lunch, dinner).
 - Balance sightseeing, nature, local culture, and food.
 - Adjust activity density to the pace (relaxed = fewer, packed = more).
+${isPartial ? '- MUST NOT reuse activities already present on other days (check the context).' : ''}
 - DO NOT output JSON. Plain text only.
 
 Output format:
-Day 1: [Theme]
+${isPartial ? `Day ${targetDayNumbers![0]}: [Theme]` : `Day 1: [Theme]`}
 - Morning: [Activity with brief rationale]
 - Lunch: [Restaurant name]
 - Afternoon: [Activity]
@@ -382,7 +410,7 @@ Day 1: [Theme]
   onProgress?.(`🔍 Agent 2 (Critic): Reviewing and improving the plan...`);
   await delay(800);
 
-  const criticPrompt = `You are the TRIP CRITIC. You have received the following first-draft itinerary for a ${totalDays}-day trip to ${destination}.
+  const criticPrompt = `You are the TRIP CRITIC. You have received the following first-draft itinerary for ${isPartial ? `Day(s) ${targetDaysStr} of ` : ''}a trip to ${destination}.
 
 FIRST DRAFT:
 ---
@@ -390,12 +418,13 @@ ${architectOutline}
 ---
 
 Travelers: ${travelers} people. Pace: ${intensity}.
-${referenceContext ? `USER PREFERENCES:\n${referenceContext}\n` : ''}
+${referenceContext ? `USER PREFERENCES & CONTEXT:\n${referenceContext}\n` : ''}
 YOUR TASK: Critically review the draft and produce an IMPROVED version. You MUST:
-1. Identify at least 3 weaknesses (e.g., poor routing, generic restaurants, too many activities for the pace, missed key local experiences).
+1. Identify at least 3 weaknesses (e.g., poor routing, generic restaurants, too many activities for the pace, missed key local experiences${isPartial ? ', or reusing places already seen on other days' : ''}).
 2. Fix each weakness in the improved plan.
 3. Ensure the improved plan is realistic and logistically sound.
 4. Keep real, specific place names and restaurants.
+${isPartial ? `5. ONLY output the improved plan for Day(s) ${targetDaysStr}.` : ''}
 
 Output format:
 CRITIQUE:
@@ -404,7 +433,7 @@ CRITIQUE:
 - [Issue 3]: [Fix applied]
 
 IMPROVED PLAN:
-Day 1: [Theme]
+${isPartial ? `Day ${targetDayNumbers![0]}: [Theme]` : `Day 1: [Theme]`}
 - Morning: ...
 ...`;
 
@@ -500,7 +529,8 @@ Return ONLY valid JSON:
     });
 
     if (dayNum < daysToProcess[daysToProcess.length - 1]) {
-      await delay(1000);
+      // Generous inter-day delay to let browser connection pool recover
+      await delay(2500 + Math.random() * 1000);
     }
   }
 
@@ -583,7 +613,7 @@ export async function enrichPlaceWithAi(placeTitle: string, location?: {lat: num
   const apiKey = geminiKeyManager.getNextKey();
   if (!apiKey) throw new Error('No API keys available.');
 
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = getGenAIClient(apiKey);
   
   const prompt = `You are a travel data assistant. I have a location from Google Maps:
 Title: ${placeTitle}

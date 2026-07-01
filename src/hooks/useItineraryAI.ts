@@ -8,6 +8,14 @@ import { parseItineraryDocument, generateItineraryFromScratch } from '../utils/i
 import { toLocalIso, getFullTripContext, parseDateString } from '../useItineraryState';
 import { getToolDeclarations, SARA_CAPABILITIES_PROMPT, SARA_IDENTITY_PROMPT } from '../utils/saraTools';
 
+const genAIClients = new Map<string, GoogleGenAI>();
+function getGenAIClient(apiKey: string) {
+  if (!genAIClients.has(apiKey)) {
+    genAIClients.set(apiKey, new GoogleGenAI({ apiKey }));
+  }
+  return genAIClients.get(apiKey)!;
+}
+
 interface UseItineraryAIProps {
   activeTrip: any;
   activeTripId: string | null;
@@ -86,7 +94,37 @@ export function useItineraryAI({
     
     const intensity = (['relaxed', 'balanced', 'packed'].includes(intensityValue) ? intensityValue : 'balanced') as 'relaxed' | 'balanced' | 'packed';
     const isPartial = targetDayNumbers && targetDayNumbers.length > 0;
-    setNotification(isPartial ? `🤖 Regenerating Day(s) ${targetDayNumbers.join(', ')}...` : t('notification_planning'));
+
+    // ── Checkpoint/Resume logic ──────────────────────────────────────────────
+    // After a crash (ERR_INSUFFICIENT_RESOURCES, refresh, etc.) the user can
+    // say "continue" / "pokračuj" and we'll pick up from the last completed day.
+    const checkpointKey = `smartgen_checkpoint_${activeTripId}`;
+    let checkpoint: { completedDays: number[]; intensity: string; totalDays: number } | null = null;
+    try {
+      const raw = localStorage.getItem(checkpointKey);
+      if (raw) checkpoint = JSON.parse(raw);
+    } catch { /* ignore */ }
+
+    // If we have a checkpoint and no explicit targetDayNumbers, resume from where we left off
+    if (checkpoint && !isPartial) {
+      const remainingDays: number[] = [];
+      for (let d = 1; d <= checkpoint.totalDays; d++) {
+        if (!checkpoint.completedDays.includes(d)) remainingDays.push(d);
+      }
+      if (remainingDays.length > 0 && remainingDays.length < checkpoint.totalDays) {
+        console.log(`[SmartGen] Resuming from checkpoint: days ${remainingDays.join(',')} remaining of ${checkpoint.totalDays}`);
+        targetDayNumbers = remainingDays;
+        setNotification(`🔄 Resuming generation: ${remainingDays.length} days remaining...`);
+      } else {
+        // All done or empty — clear checkpoint and start fresh
+        localStorage.removeItem(checkpointKey);
+        checkpoint = null;
+      }
+    }
+
+    setNotification(targetDayNumbers && targetDayNumbers.length > 0
+      ? `🤖 ${targetDayNumbers.length < (checkpoint?.totalDays || 999) ? 'Resuming' : 'Regenerating'} Day(s) ${targetDayNumbers.join(', ')}...`
+      : t('notification_planning'));
     setIsChatLoading(true);
 
     const onProgress = (msg: string) => {
@@ -98,7 +136,7 @@ export function useItineraryAI({
       const hasReferenceDocs = activeTrip.referenceDocs && activeTrip.referenceDocs.length > 0;
       let parsedDays: ParsedDay[];
 
-      const tripMetadataContext = `
+      let tripMetadataContext = `
 TRAVELER DETAILS:
 - Total: ${activeTrip.travelers} people
 - Composition: ${activeTrip.adults || 0} adults, ${activeTrip.kids || 0} kids
@@ -109,6 +147,18 @@ ${activeTrip.travelerProfiles.map((p: any) => `- ${p.name} (${p.gender}${p.age ?
 ` : ''}
 ${activeTrip.originalRequest ? `USER INITIAL REQUEST: ${activeTrip.originalRequest}` : ''}
 `;
+
+      if (isPartial) {
+        tripMetadataContext += `\n\nCURRENT ITINERARY CONTEXT:\n${getFullTripContext(activeTrip, itinerary)}\n\nCRITICAL RULE: We are ONLY replanning Day(s): ${targetDayNumbers!.join(', ')}. Do NOT suggest activities that are already scheduled on other days.`;
+      }
+
+      // Initialize checkpoint tracking for fresh generation
+      const start = new Date(activeTrip.startDate);
+      const end = new Date(activeTrip.endDate);
+      const totalDays = Math.ceil((end.getTime() - start.getTime()) / (1000 * 3600 * 24)) + 1;
+      if (!checkpoint) {
+        checkpoint = { completedDays: [], intensity: intensityValue, totalDays };
+      }
 
       if (hasReferenceDocs) {
         const fullDocText = activeTrip.referenceDocs!.map((d: any) => d.content).join('\n\n---\n\n');
@@ -217,7 +267,16 @@ ${activeTrip.originalRequest ? `USER INITIAL REQUEST: ${activeTrip.originalReque
               duration: 0,
             });
           }
+
+          // ── Save checkpoint after each completed day ──
+          checkpoint!.completedDays.push(day.dayNumber);
+          try {
+            localStorage.setItem(checkpointKey, JSON.stringify(checkpoint));
+          } catch { /* quota exceeded — ignore */ }
         }
+
+        // All days done — clear checkpoint
+        localStorage.removeItem(checkpointKey);
 
         const msgEn = `📝 Done! ${totalPois} activities across ${parsedDays.length} days (${enrichedCount} enriched from Google Maps).`;
         const msgCs = `📝 Hotovo! ${totalPois} aktivit vygenerováno pro ${parsedDays.length} dní (${enrichedCount} obohaceno z Google Maps).`;
@@ -228,14 +287,22 @@ ${activeTrip.originalRequest ? `USER INITIAL REQUEST: ${activeTrip.originalReque
       }
     } catch (err: any) {
       console.error('SmartGeneration error:', err);
-      const errMsg = `❌ ${err.message || 'Generation failed.'}`;
+      // Don't clear checkpoint on error — allows resume!
+      const completedSoFar = checkpoint?.completedDays?.length || 0;
+      const totalTarget = checkpoint?.totalDays || 0;
+      const resumeHint = completedSoFar > 0 && completedSoFar < totalTarget
+        ? ` (${completedSoFar}/${totalTarget} days completed — say "continue" to resume)`
+        : '';
+      const errMsg = `❌ ${err.message || 'Generation failed.'}${resumeHint}`;
       setNotification(errMsg);
-      // SPEED: Hardcode bilingual error
-      const bError: BilingualString = { en: errMsg, cs: `❌ ${err.message || 'Generování selhalo.'}` };
+      const bError: BilingualString = {
+        en: errMsg,
+        cs: `❌ ${err.message || 'Generování selhalo.'}${completedSoFar > 0 ? ` (${completedSoFar}/${totalTarget} dní dokončeno — řekněte "pokračuj" pro obnovení)` : ''}`
+      };
       setMessages(prev => [...prev, { role: 'model', text: bError }]);
     }
     setIsChatLoading(false);
-  }, [activeTrip, lang, addPoi, setNotification, t, clearDay, searchPlacesAsync]);
+  }, [activeTrip, activeTripId, lang, addPoi, setNotification, t, clearDay, searchPlacesAsync]);
 
   // Unified tool call handler for both text chat and voice chat
   const handleToolCall = useCallback(async (name: string, args: any) => {
@@ -287,12 +354,24 @@ ${activeTrip.originalRequest ? `USER INITIAL REQUEST: ${activeTrip.originalReque
       await clearItinerary();
       replyText = { en: 'The entire itinerary has been cleared.', cs: 'Celý itinerář byl vymazán.' };
     } else if (name === 'update_itinerary') {
-      // NOTE: handleItineraryUpdate modifies state asynchronously and takes text input
-      // It's used when the tool itself wants the agent to run the AI bulk update
-      if (args.request) {
-         handleItineraryUpdate(args.request);
+      // Detect if the request involves full-day replanning → use multi-agent pipeline
+      const req = (args.request || '').toLowerCase();
+      const isDayReplan = /\b(replan|přeplánuj|naplánuj|plan|replánuj|předělej|redo|regenerate|create|vytvoř).*(day|den|celý den|whole day|entire day|all activities|trip|výlet)/i.test(req)
+        || /\b(day|den)\s*\d+.*(replan|přeplánuj|naplánuj|předělej|redo|regenerate|from scratch|znovu)/i.test(req);
+
+      if (isDayReplan) {
+        // Extract day numbers from the request
+        const dayMatches = req.match(/(?:day|den)\s*(\d+)/gi);
+        const dayNums = dayMatches
+          ? dayMatches.map(m => parseInt(m.replace(/\D/g, ''))).filter(n => !isNaN(n))
+          : undefined;
+        console.log(`[Tool:update_itinerary] Detected replanning → multi-agent pipeline for days: ${dayNums?.join(',') || 'all'}`);
+        handleSmartGeneration(args.intensity || 'balanced', dayNums && dayNums.length > 0 ? dayNums : undefined);
+        replyText = { en: 'Multi-agent replanning started...', cs: 'Vícestupňové přeplánování spuštěno...' };
+      } else if (args.request) {
+        handleItineraryUpdate(args.request);
+        replyText = { en: 'Bulk update applied.', cs: 'Hromadná aktualizace použita.' };
       }
-      replyText = { en: 'Bulk update applied.', cs: 'Hromadná aktualizace použita.' };
     } else if (name === 'update_trip_details') {
       if (activeTripId) { 
         const { ...details } = args; 
@@ -432,6 +511,19 @@ ${activeTrip.originalRequest ? `USER INITIAL REQUEST: ${activeTrip.originalReque
     const maxRetries = 6;
     const chatModels = ['gemini-flash-lite-latest'];
 
+    // Intercept explicit "continue" requests to resume generation if a checkpoint exists
+    const userMsgLower = userMsg.toLowerCase().trim();
+    if (/^(continue|pokracuj|pokračuj|resume|go on|dál|pokracovat|vytvor mi ten plan|vytvoř mi ten plán)$/.test(userMsgLower)) {
+      const checkpointKey = `smartgen_checkpoint_${activeTripId}`;
+      const hasCheckpoint = localStorage.getItem(checkpointKey);
+      if (hasCheckpoint) {
+        setMessages(prev => [...prev, { role: 'model', text: { en: 'Resuming itinerary generation...', cs: 'Pokračuji v generování itineráře...' } }]);
+        setIsChatLoading(false);
+        handleSmartGeneration();
+        return;
+      }
+    }
+
     while (retryCount < maxRetries) {
       const apiKey = geminiKeyManager.getNextKey();
       if (!apiKey) {
@@ -444,19 +536,25 @@ ${activeTrip.originalRequest ? `USER INITIAL REQUEST: ${activeTrip.originalReque
       }
 
       try {
-        const ai = new GoogleGenAI({ apiKey });
+        const ai = getGenAIClient(apiKey);
         const dest = activeTrip?.destination || 'Unknown Destination';
         const tripTitle = activeTrip?.title || 'Trip';
         const activeModel = chatModels[(modelRotationRef.current + retryCount) % chatModels.length];
         const itineraryContext = generatePromptContext();
         
+        const checkpointKey = `smartgen_checkpoint_${activeTripId}`;
+        const hasCheckpoint = localStorage.getItem(checkpointKey);
+        const checkpointPrompt = hasCheckpoint 
+          ? `\nIMPORTANT: There is an interrupted itinerary generation for this trip. If the user asks to "continue", "resume", or "pokračuj", you MUST call "trigger_smart_itinerary_generation" to resume it.`
+          : '';
+
         const systemInstruction = `${SARA_IDENTITY_PROMPT}
 
 You are helping with the trip "${tripTitle}" to ${dest}.
 
 ${itineraryContext}
 
-All costs in €. Use searchGooglePlaces for real recommendations.
+All costs in €. Use searchGooglePlaces for real recommendations.${checkpointPrompt}
 RESPONSE FORMAT: You MUST respond in BOTH English and Czech in every reply.
 Format your reply as JSON: {"en": "your English reply", "cs": "your Czech reply"}
 ALWAYS respond in this JSON format. Never respond in plain text.`;
