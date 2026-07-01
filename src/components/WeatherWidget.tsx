@@ -133,7 +133,7 @@ export function WeatherWidget({ destination, startDate, showCompact, targetDate,
              const end = new Date(tripStart);
              end.setDate(end.getDate() + 10);
              const maxForecastDate = new Date(today);
-             maxForecastDate.setDate(maxForecastDate.getDate() + 15);
+             maxForecastDate.setDate(maxForecastDate.getDate() + 14);
              const finalEnd = end > maxForecastDate ? maxForecastDate : end;
 
              url = `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&daily=weathercode,temperature_2m_max,temperature_2m_min,windspeed_10m_max,precipitation_sum&hourly=temperature_2m,precipitation,weather_code&timezone=auto&start_date=${toLocalIso(tripStart)}&end_date=${toLocalIso(finalEnd)}`;

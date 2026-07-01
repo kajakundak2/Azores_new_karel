@@ -706,6 +706,19 @@ function GoogleMapInner({
     setSearchResult(null);
   }, []);
 
+  const handleMarkerHover = useCallback((poi: POI | null) => {
+    onMarkerHover?.(poi ? poi.id : null);
+  }, [onMarkerHover]);
+
+  const searchResultMarkers = useMemo(() => {
+    if (!searchResult || !searchResult.location) return [];
+    return [{
+      poi: searchResult,
+      color: '#f59e0b',
+      label: '★',
+    }];
+  }, [searchResult]);
+
   // Get the pois for routing
   const routePois = useMemo(() => {
     if (showAllDays) return [];
@@ -814,7 +827,7 @@ function GoogleMapInner({
         markers={activeMarkers}
         onMarkerClick={onMarkerClick}
         hoveredId={hoveredPoiId}
-        onMarkerHover={useCallback((poi: POI | null) => onMarkerHover?.(poi ? poi.id : null), [onMarkerHover])}
+        onMarkerHover={handleMarkerHover}
       />
 
       {/* Browse markers */}
@@ -822,17 +835,13 @@ function GoogleMapInner({
         markers={browseMarkerData}
         onMarkerClick={onMarkerClick}
         hoveredId={hoveredPoiId}
-        onMarkerHover={useCallback((poi: POI | null) => onMarkerHover?.(poi ? poi.id : null), [onMarkerHover])}
+        onMarkerHover={handleMarkerHover}
       />
 
       {/* Search result marker (temporary) */}
-      {searchResult && searchResult.location && (
+      {searchResultMarkers.length > 0 && (
         <ClassicMarkers
-          markers={useMemo(() => [{
-            poi: searchResult,
-            color: '#f59e0b',
-            label: '★',
-          }], [searchResult])}
+          markers={searchResultMarkers}
           onMarkerClick={onMarkerClick}
         />
       )}
@@ -841,6 +850,7 @@ function GoogleMapInner({
       {hoveredPoi && hoveredPoi.location && (
         <InfoWindow
           position={{ lat: hoveredPoi.location.lat, lng: hoveredPoi.location.lng }}
+          pixelOffset={window.google?.maps?.Size ? new window.google.maps.Size(0, -45) : undefined}
           headerDisabled
           disableAutoPan
         >
@@ -848,7 +858,8 @@ function GoogleMapInner({
             className={`p-2 flex items-center gap-3 w-max max-w-xs shadow-xl rounded-xl transition-all ${theme === 'dark' ? 'bg-zinc-950 text-white' : 'bg-white text-slate-900 outline outline-1 outline-slate-200'}`}
             style={{ 
               backgroundColor: theme === 'dark' ? '#09090b' : '#ffffff',
-              color: theme === 'dark' ? '#ffffff' : '#0f172a'
+              color: theme === 'dark' ? '#ffffff' : '#0f172a',
+              pointerEvents: 'none'
             }}
           >
             {hoveredPoi.imageUrl ? (
