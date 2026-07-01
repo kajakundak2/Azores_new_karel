@@ -129,21 +129,43 @@ export function WeatherWidget({ destination, startDate, showCompact, targetDate,
             return `${y}-${m}-${d}`;
           };
 
-          if (diffDays >= -30 && diffDays <= 14) {
-             const end = new Date(tripStart);
-             end.setDate(end.getDate() + 10);
-             const maxForecastDate = new Date(today);
-             maxForecastDate.setDate(maxForecastDate.getDate() + 14);
-             const finalEnd = end > maxForecastDate ? maxForecastDate : end;
+          // Forecast API: supports today → today+16 days
+          // Use archive if trip starts more than 16 days from now OR is entirely in the past (>30 days ago)
+          const MAX_FORECAST_OFFSET = 16; // open-meteo hard limit
+          const tripTooFarFuture = diffDays > MAX_FORECAST_OFFSET;
+          const tripTooFarPast = diffDays < -30;
 
-             url = `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&daily=weathercode,temperature_2m_max,temperature_2m_min,windspeed_10m_max,precipitation_sum&hourly=temperature_2m,precipitation,weather_code&timezone=auto&start_date=${toLocalIso(tripStart)}&end_date=${toLocalIso(finalEnd)}`;
+          if (!tripTooFarFuture && !tripTooFarPast) {
+            // Forecast window — clamp both dates to the valid range
+            const forecastWindowEnd = new Date(today);
+            forecastWindowEnd.setDate(forecastWindowEnd.getDate() + MAX_FORECAST_OFFSET);
+
+            // start_date must be >= today (API rejects past dates on /forecast)
+            const clampedStart = diffDays < 0 ? today : tripStart;
+
+            // end_date = trip start + 10 days, but capped at the forecast window
+            const desiredEnd = new Date(tripStart);
+            desiredEnd.setDate(desiredEnd.getDate() + 10);
+            const clampedEnd = desiredEnd > forecastWindowEnd ? forecastWindowEnd : desiredEnd;
+
+            // Safety: if clamping produced start > end, fall through to archive
+            if (clampedStart > clampedEnd) {
+              historical = true;
+              const lastYearStart = new Date(tripStart);
+              lastYearStart.setFullYear(lastYearStart.getFullYear() - 1);
+              const end = new Date(lastYearStart);
+              end.setDate(end.getDate() + 10);
+              url = `https://archive-api.open-meteo.com/v1/archive?latitude=${latitude}&longitude=${longitude}&daily=weathercode,temperature_2m_max,temperature_2m_min,windspeed_10m_max,precipitation_sum&hourly=temperature_2m,precipitation,weather_code&timezone=auto&start_date=${toLocalIso(lastYearStart)}&end_date=${toLocalIso(end)}`;
+            } else {
+              url = `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&daily=weathercode,temperature_2m_max,temperature_2m_min,windspeed_10m_max,precipitation_sum&hourly=temperature_2m,precipitation,weather_code&timezone=auto&start_date=${toLocalIso(clampedStart)}&end_date=${toLocalIso(clampedEnd)}`;
+            }
           } else {
-             historical = true;
-             const lastYearStart = new Date(tripStart);
-             lastYearStart.setFullYear(lastYearStart.getFullYear() - 1);
-             const end = new Date(lastYearStart);
-             end.setDate(end.getDate() + 10);
-             url = `https://archive-api.open-meteo.com/v1/archive?latitude=${latitude}&longitude=${longitude}&daily=weathercode,temperature_2m_max,temperature_2m_min,windspeed_10m_max,precipitation_sum&hourly=temperature_2m,precipitation,weather_code&timezone=auto&start_date=${toLocalIso(lastYearStart)}&end_date=${toLocalIso(end)}`;
+            historical = true;
+            const lastYearStart = new Date(tripStart);
+            lastYearStart.setFullYear(lastYearStart.getFullYear() - 1);
+            const end = new Date(lastYearStart);
+            end.setDate(end.getDate() + 10);
+            url = `https://archive-api.open-meteo.com/v1/archive?latitude=${latitude}&longitude=${longitude}&daily=weathercode,temperature_2m_max,temperature_2m_min,windspeed_10m_max,precipitation_sum&hourly=temperature_2m,precipitation,weather_code&timezone=auto&start_date=${toLocalIso(lastYearStart)}&end_date=${toLocalIso(end)}`;
           }
 
           const weatherRes = await fetch(url);
@@ -217,12 +239,20 @@ export function WeatherWidget({ destination, startDate, showCompact, targetDate,
     return (
       <div 
         onClick={(e) => { e.stopPropagation(); setSelectedDay(compactDay); }}
-        className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border transition-all cursor-pointer shadow-sm group/weather ${theme === 'dark' ? 'bg-white/5 hover:bg-white/10 border-white/5' : 'bg-white hover:bg-slate-50 border-slate-200'}`}
+        title={isHistorical ? t('weather_avg_tooltip') : undefined}
+        className={`flex flex-col items-center gap-0.5 cursor-pointer group/weather`}
       >
-        {condition === 'sunny' && <Sun size={12} className="text-amber-500" />}
-        {condition === 'cloudy' && <Cloud size={12} className="text-slate-400" />}
-        {condition === 'rainy' && <CloudRain size={12} className="text-sky-500" />}
-        <span className={`text-[10px] font-black ${theme === 'dark' ? 'text-white/80' : 'text-slate-800'}`}>{compactDay.maxTemp}°</span>
+        <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border transition-all shadow-sm ${isHistorical ? (theme === 'dark' ? 'bg-amber-500/10 border-amber-500/20 hover:bg-amber-500/20' : 'bg-amber-50 border-amber-200 hover:bg-amber-100') : (theme === 'dark' ? 'bg-white/5 hover:bg-white/10 border-white/5' : 'bg-white hover:bg-slate-50 border-slate-200')}`}>
+          {condition === 'sunny' && <Sun size={12} className="text-amber-500" />}
+          {condition === 'cloudy' && <Cloud size={12} className="text-slate-400" />}
+          {condition === 'rainy' && <CloudRain size={12} className="text-sky-500" />}
+          <span className={`text-[10px] font-black ${theme === 'dark' ? 'text-white/80' : 'text-slate-800'}`}>{compactDay.maxTemp}°</span>
+        </div>
+        {isHistorical && (
+          <span className={`text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded-full ${theme === 'dark' ? 'text-amber-400/80 bg-amber-500/10' : 'text-amber-600 bg-amber-50'}`}>
+            {t('weather_avg')}
+          </span>
+        )}
         <AnimatePresence>
           {selectedDay && <WeatherDetailModal day={selectedDay} onClose={() => setSelectedDay(null)} isHistorical={isHistorical} theme={theme} lang={lang} />}
         </AnimatePresence>

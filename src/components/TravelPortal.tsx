@@ -365,6 +365,7 @@ export const TravelPortal: React.FC<TravelPortalProps> = ({
             removePoi={removePoi} updatePoiTransportMode={updatePoiTransportMode} setSelectedPoi={setSelectedPoi}
             currency={currency} rates={rates} t={t}
             travelers={activeTrip?.travelers || 2}
+            setHoveredPoiId={setHoveredPoiId}
           />
         </div>
 

@@ -351,11 +351,12 @@ const TransitNode = ({ prev, next, onModeChange, theme, lang, departureDate }: {
 
 // ── Timeline Node (Draggable) ─────────────────────────────────────────────────
 export const TimelineNode = ({
-  poi, lang, onSelect, onRemove, theme, currency, rates
+  poi, lang, onSelect, onRemove, theme, currency, rates, setHoveredPoiId
 }: {
   poi: POI; lang: string; onSelect: (poi: POI) => void; onRemove: () => void; theme: 'dark' | 'light';
   currency?: string;
   rates?: any;
+  setHoveredPoiId?: (id: string | null) => void;
 }) => {
   const t = createT(lang);
 
@@ -369,7 +370,11 @@ export const TimelineNode = ({
   const isEvent = poi.category === 'Event';
 
   return (
-    <div className="relative flex items-center group">
+    <div 
+      className="relative flex items-center group"
+      onPointerEnter={() => setHoveredPoiId?.(poi.id)}
+      onPointerLeave={() => setHoveredPoiId?.(null)}
+    >
       {/* Timeline Edge & Dot */}
       <div className="absolute left-6 top-10 bottom-[-40px] w-0.5 bg-slate-200 dark:bg-white/10 group-last:hidden" />
       
@@ -506,7 +511,7 @@ export const TimelineNode = ({
 
 // ── Vertical Timeline Day ─────────────────────────────────────────────────────
 export const VerticalTimelineDay = ({
-  date, lang, items, onRemove, onSelect, onModeChange, destination, tripStartDate, theme, currency, rates, travelers = 2
+  date, lang, items, onRemove, onSelect, onModeChange, destination, tripStartDate, theme, currency, rates, travelers = 2, setHoveredPoiId
 }: {
   date: Date; 
   lang: string; 
@@ -520,6 +525,7 @@ export const VerticalTimelineDay = ({
   currency?: string;
   rates?: any;
   travelers?: number;
+  setHoveredPoiId?: (id: string | null) => void;
 }) => {
   const t = createT(lang);
   const iso = toLocalIso(date);
@@ -645,6 +651,7 @@ export const VerticalTimelineDay = ({
                     theme={theme as any}
                     currency={currency}
                     rates={rates}
+                    setHoveredPoiId={setHoveredPoiId}
                   />
                   {idx < items.length - 1 && (
                     <TransitNode 

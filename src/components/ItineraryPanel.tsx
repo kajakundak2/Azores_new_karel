@@ -21,6 +21,7 @@ interface ItineraryPanelProps {
   rates: Record<string, number>;
   t: (key: any, params?: any) => string;
   travelers?: number;
+  setHoveredPoiId?: (id: string | null) => void;
 }
 
 export const ItineraryPanel: React.FC<ItineraryPanelProps> = ({
@@ -39,6 +40,7 @@ export const ItineraryPanel: React.FC<ItineraryPanelProps> = ({
   rates,
   t,
   travelers = 2,
+  setHoveredPoiId,
 }) => {
   return (
     <div className="p-4 flex-1">
@@ -112,6 +114,7 @@ export const ItineraryPanel: React.FC<ItineraryPanelProps> = ({
                 currency={currency}
                 rates={rates}
                 travelers={travelers}
+                setHoveredPoiId={setHoveredPoiId}
               />
             </div>
           );

@@ -405,6 +405,8 @@ export const TEXTS: Record<string, Record<string, string>> = {
   weather_hourly: { en: 'Hourly Conditions', cs: 'Hodinové podmínky' },
   weather_dry: { en: 'Dry', cs: 'Sucho' },
   weather_confidence: { en: 'Plan your day with confidence', cs: 'Plánujte den s jistotou' },
+  weather_avg: { en: 'avg', cs: 'prům' },
+  weather_avg_tooltip: { en: 'Climatic average from last year — forecast not yet available', cs: 'Klimatický průměr z loňského roku — předpověď ještě není k dispozici' },
   // Chat
   chat_header_title: { en: 'Sára AI Agent', cs: 'Sára AI Agent' },
   chat_ready_status: { en: 'Live & Ready', cs: 'Na příjmu' },
