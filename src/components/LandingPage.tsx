@@ -3,13 +3,13 @@ import { Trip } from '../data';
 import { usePlannerChat } from '../hooks/usePlannerChat';
 import { PlannerChat } from './PlannerChat';
 import { SaraAssistant } from './characters/SaraAssistant';
-import { TreasureHuntGame } from './characters/TreasureHuntGame';
 import { useLiveGemini } from '../hooks/useLiveGemini';
 import { geminiKeyManager } from '../utils/geminiKeyManager';
 import { MapPin, Calendar, Users, Plane, Sparkles, Trash2, ChevronRight, Compass, ArrowRight, Mic, MicOff, Phone, PhoneOff, Volume2, Hotel, Layout, MessageSquare, Plus, Minus, Sun, Moon } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { TEXTS } from '../data';
 import { createT } from '../utils/i18n';
+import { useNavigate } from 'react-router-dom';
 
 interface LandingPageProps {
   trips: Trip[];
@@ -41,8 +41,9 @@ export function LandingPage({ trips, onCreateTrip, onSelectTrip, onDeleteTrip, l
   const [plannerInput, setPlannerInput] = useState('');
   const [planningMode, setPlanningMode] = useState<'full' | 'suggestions_only'>('full');
   
-  const [showTreasureHunt, setShowTreasureHunt] = useState(false);
+  const [showTreasureHunt, setShowTreasureHunt] = useState(false); // kept for SaraAssistant prop compatibility
   const [treasureHuntComplete, setTreasureHuntComplete] = useState(false);
+  const navigate = useNavigate();
   const [saraAwake, setSaraAwake] = useState(false);
   const [saraHasWaved, setSaraHasWaved] = useState(false);
   const [travelerProfiles, setTravelerProfiles] = useState<any[]>([]);
@@ -480,7 +481,7 @@ export function LandingPage({ trips, onCreateTrip, onSelectTrip, onDeleteTrip, l
                             setSaraAwake(false);
                           }, 3000);
                         }}
-                        onSidekickClick={() => setShowTreasureHunt(true)}
+                        onSidekickClick={() => navigate('/minigame')}
                         packingComplete={treasureHuntComplete}
                         hasTrip={destination !== '' || trips.length > 0}
                         awakeMode={saraAwake}
@@ -499,12 +500,6 @@ export function LandingPage({ trips, onCreateTrip, onSelectTrip, onDeleteTrip, l
                       />
                     </div>
                 </div>
-
-                <TreasureHuntGame
-                  isOpen={showTreasureHunt}
-                  onClose={() => setShowTreasureHunt(false)}
-                  language={lang as 'en' | 'cs'}
-                />
 
                 {/* Launch Matrix */}
                 <div className="pt-6">

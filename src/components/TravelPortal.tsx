@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { AnimatePresence, motion } from 'motion/react';
 import { MapPin } from 'lucide-react';
 import { DndContext, DragOverlay } from '@dnd-kit/core';
@@ -90,6 +91,7 @@ export const TravelPortal: React.FC<TravelPortalProps> = ({
   theme,
   setTheme
 }) => {
+  const navigate = useNavigate();
   const [notification, setNotification] = useState<string | null>(null);
   const [currency, setCurrency] = useState('EUR');
   const [rates, setRates] = useState<Record<string, number>>({ EUR: 1, CZK: 25.0, USD: 1.08 });
@@ -333,7 +335,7 @@ export const TravelPortal: React.FC<TravelPortalProps> = ({
     <DndContext onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
       <div className="flex flex-col-reverse md:flex-row h-screen w-full font-sans transition-colors duration-700 overflow-hidden bg-zinc-950">
         <div className={`w-full h-1/2 md:h-full md:w-[450px] lg:w-[500px] border-r border-t md:border-t-0 flex flex-col relative z-20 transition-colors duration-700 ${theme === 'dark' ? 'bg-zinc-950 border-white/5 shadow-[0_-10px_40px_rgba(0,0,0,0.5)]' : 'bg-white border-slate-200'} overflow-y-auto scrollbar-hide`} style={{ scrollbarWidth: 'none' }}>
-          <TopBar trip={activeTrip} lang={lang} setLang={setLang} currency={currency} setCurrency={setCurrency} rates={rates} theme={theme} onThemeToggle={() => setTheme(theme === 'dark' ? 'light' : 'dark')} onExit={() => setActiveTripId(null)} onUpdate={(data) => updateTrip(activeTrip.id, data)} />
+          <TopBar trip={activeTrip} lang={lang} setLang={setLang} currency={currency} setCurrency={setCurrency} rates={rates} theme={theme} onThemeToggle={() => setTheme(theme === 'dark' ? 'light' : 'dark')} onExit={() => { setActiveTripId(null); navigate('/'); }} onUpdate={(data) => updateTrip(activeTrip.id, data)} />
           <div className="h-16 flex-shrink-0" />
           
           <div className={`p-6 border-b transition-colors duration-700 ${theme === 'dark' ? 'border-white/5 bg-zinc-950' : 'border-slate-200 bg-white'}`}>

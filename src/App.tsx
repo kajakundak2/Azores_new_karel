@@ -3,6 +3,82 @@ import { APIProvider } from '@vis.gl/react-google-maps';
 import { useItineraryState } from './useItineraryState';
 import { LandingPage } from './components/LandingPage';
 import { TravelPortal } from './components/TravelPortal';
+import { Routes, Route, useNavigate, useParams } from 'react-router-dom';
+import { TreasureHuntGame } from './components/characters/TreasureHuntGame';
+import { Trip } from './data';
+
+function TripRouteWrapper({ trips, activeTripId, activeTrip, setActiveTripId, itinerary, days, ...props }: any) {
+  const { tripId } = useParams<{ tripId: string }>();
+
+  useEffect(() => {
+    if (tripId && tripId !== activeTripId) {
+      setActiveTripId(tripId);
+    }
+  }, [tripId, activeTripId, setActiveTripId]);
+
+  if (!activeTripId || !activeTrip || activeTripId !== tripId) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-zinc-950 text-white">
+        <div className="text-xl animate-pulse">Loading itinerary...</div>
+      </div>
+    );
+  }
+
+  return (
+    <TravelPortal
+      trips={trips}
+      activeTripId={activeTripId}
+      activeTrip={activeTrip}
+      itinerary={itinerary}
+      days={days}
+      setActiveTripId={setActiveTripId}
+      {...props}
+    />
+  );
+}
+
+function LandingRouteWrapper({ trips, createTrip, setActiveTripId, deleteTrip, lang, setLang, theme, setTheme }: any) {
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    setActiveTripId(null);
+  }, [setActiveTripId]);
+
+  const handleCreateTrip = async (data: Partial<Trip>) => {
+    const id = await createTrip(data);
+    navigate(`/trip/${id}`);
+    return id;
+  };
+
+  const handleSelectTrip = (id: string) => {
+    setActiveTripId(id);
+    navigate(`/trip/${id}`);
+  };
+
+  return (
+    <LandingPage 
+      trips={trips} 
+      onCreateTrip={handleCreateTrip} 
+      onSelectTrip={handleSelectTrip} 
+      onDeleteTrip={deleteTrip} 
+      lang={lang} 
+      onLanguageToggle={(l) => setLang(l)}
+      theme={theme} 
+      onThemeToggle={() => setTheme((p: string) => p === 'dark' ? 'light' : 'dark')} 
+    />
+  );
+}
+
+function MinigameRouteWrapper({ lang }: { lang: 'en' | 'cs' }) {
+  const navigate = useNavigate();
+  return (
+    <TreasureHuntGame
+      isOpen={true}
+      onClose={() => navigate('/')}
+      language={lang}
+    />
+  );
+}
 
 export default function App() {
   const [lang, setLang] = useState('en');
@@ -82,23 +158,6 @@ export default function App() {
     };
   }, []);
 
-  if (!activeTripId || !activeTrip) {
-    return (
-      <APIProvider apiKey={mapsApiKey} libraries={['places', 'routes']}>
-        <LandingPage 
-          trips={trips} 
-          onCreateTrip={createTrip} 
-          onSelectTrip={setActiveTripId} 
-          onDeleteTrip={deleteTrip} 
-          lang={lang} 
-          onLanguageToggle={(l) => setLang(l)}
-          theme={theme} 
-          onThemeToggle={() => setTheme(p => p === 'dark' ? 'light' : 'dark')} 
-        />
-      </APIProvider>
-    );
-  }
-
   return (
     <APIProvider apiKey={mapsApiKey} libraries={['places', 'routes']}>
       {notifications.length > 0 && (
@@ -120,39 +179,56 @@ export default function App() {
           ))}
         </div>
       )}
-      <TravelPortal
-        trips={trips}
-        activeTripId={activeTripId}
-        activeTrip={activeTrip}
-        itinerary={itinerary}
-        days={days}
-        addPoi={addPoi}
-        removePoi={removePoi}
-        clearDay={clearDay}
-        clearItinerary={clearItinerary}
-        updateTrip={updateTrip}
-        setActiveTripId={setActiveTripId}
-        updatePoiTransportMode={updatePoiTransportMode}
-        updatePoi={updatePoi}
-        addReferenceDoc={addReferenceDoc}
-        movePoi={movePoi}
-        modifyPoi={modifyPoi}
-        reorderPois={reorderPois}
-        addStay={addStay}
-        removeStay={removeStay}
-        modifyStay={modifyStay}
-        addFlight={addFlight}
-        removeFlight={removeFlight}
-        addDay={addDay}
-        removeDay={removeDay}
-        setDayTheme={setDayTheme}
-        addToLibrary={addToLibrary}
-        removeFromLibrary={removeFromLibrary}
-        lang={lang}
-        setLang={setLang}
-        theme={theme}
-        setTheme={setTheme}
-      />
+      <Routes>
+        <Route path="/" element={
+          <LandingRouteWrapper 
+            trips={trips} 
+            createTrip={createTrip} 
+            setActiveTripId={setActiveTripId} 
+            deleteTrip={deleteTrip} 
+            lang={lang} 
+            setLang={setLang}
+            theme={theme} 
+            setTheme={setTheme} 
+          />
+        } />
+        <Route path="/trip/:tripId" element={
+          <TripRouteWrapper 
+            trips={trips}
+            activeTripId={activeTripId}
+            activeTrip={activeTrip}
+            itinerary={itinerary}
+            days={days}
+            setActiveTripId={setActiveTripId}
+            addPoi={addPoi}
+            removePoi={removePoi}
+            clearDay={clearDay}
+            clearItinerary={clearItinerary}
+            updateTrip={updateTrip}
+            updatePoiTransportMode={updatePoiTransportMode}
+            updatePoi={updatePoi}
+            addReferenceDoc={addReferenceDoc}
+            movePoi={movePoi}
+            modifyPoi={modifyPoi}
+            reorderPois={reorderPois}
+            addStay={addStay}
+            removeStay={removeStay}
+            modifyStay={modifyStay}
+            addFlight={addFlight}
+            removeFlight={removeFlight}
+            addDay={addDay}
+            removeDay={removeDay}
+            setDayTheme={setDayTheme}
+            addToLibrary={addToLibrary}
+            removeFromLibrary={removeFromLibrary}
+            lang={lang}
+            setLang={setLang}
+            theme={theme}
+            setTheme={setTheme}
+          />
+        } />
+        <Route path="/minigame" element={<MinigameRouteWrapper lang={lang as 'en' | 'cs'} />} />
+      </Routes>
     </APIProvider>
   );
 }
