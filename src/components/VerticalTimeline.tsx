@@ -511,7 +511,7 @@ export const TimelineNode = ({
 
 // ── Vertical Timeline Day ─────────────────────────────────────────────────────
 export const VerticalTimelineDay = ({
-  date, lang, items, onRemove, onSelect, onModeChange, destination, tripStartDate, theme, currency, rates, travelers = 2, setHoveredPoiId
+  date, lang, items, onRemove, onSelect, onModeChange, destination, tripStartDate, theme, currency, rates, travelers = 2, setHoveredPoiId, location
 }: {
   date: Date; 
   lang: string; 
@@ -526,6 +526,7 @@ export const VerticalTimelineDay = ({
   rates?: any;
   travelers?: number;
   setHoveredPoiId?: (id: string | null) => void;
+  location?: { lat: number; lng: number };
 }) => {
   const t = createT(lang);
   const iso = toLocalIso(date);
@@ -560,6 +561,7 @@ export const VerticalTimelineDay = ({
              targetDate={iso}
              theme={theme as any}
              lang={lang}
+             location={location || items.find(poi => poi.location)?.location}
           />
           <div className="text-right hidden sm:flex flex-col gap-2">
             <div>

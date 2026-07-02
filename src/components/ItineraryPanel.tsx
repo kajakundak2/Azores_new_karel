@@ -42,6 +42,8 @@ export const ItineraryPanel: React.FC<ItineraryPanelProps> = ({
   travelers = 2,
   setHoveredPoiId,
 }) => {
+  const tripLocation = (Object.values(itinerary) as POI[][]).flat().find(poi => poi.location)?.location;
+
   return (
     <div className="p-4 flex-1">
       <div className="flex items-center justify-between mb-4 px-2">
@@ -49,7 +51,13 @@ export const ItineraryPanel: React.FC<ItineraryPanelProps> = ({
         <div className={`text-[10px] font-bold ${theme === 'dark' ? 'text-emerald-400' : 'text-emerald-600'}`}>{t('days_count', { count: days.length })}</div>
       </div>
 
-      <WeatherWidget destination={activeTrip.destination || 'Destination'} startDate={activeTrip.startDate} theme={theme} lang={lang} />
+      <WeatherWidget 
+        destination={activeTrip.destination || 'Destination'} 
+        startDate={activeTrip.startDate} 
+        theme={theme} 
+        lang={lang}
+        location={tripLocation}
+      />
 
       {/* INSPIRATION VIDEOS (Instagram Reel style) */}
       <div className="mb-10 mt-2 overflow-hidden">
@@ -115,6 +123,7 @@ export const ItineraryPanel: React.FC<ItineraryPanelProps> = ({
                 rates={rates}
                 travelers={travelers}
                 setHoveredPoiId={setHoveredPoiId}
+                location={tripLocation}
               />
             </div>
           );

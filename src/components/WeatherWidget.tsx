@@ -10,6 +10,7 @@ interface WeatherWidgetProps {
   targetDate?: string;
   theme?: 'dark' | 'light';
   lang: string;
+  location?: { lat: number; lng: number };
 }
 
 interface WeatherDay {
@@ -41,10 +42,29 @@ const weatherCache: Record<string, { data: WeatherDay[], isHistorical: boolean }
 const geocodeCache: Record<string, any> = {};
 const fetchPromises: Record<string, Promise<any>> = {};
 
-export function WeatherWidget({ destination, startDate, showCompact, targetDate, theme, lang }: WeatherWidgetProps) {
+// Known precise coordinates for commonly ambiguous destinations
+// (e.g. Open-Meteo geocoding prefers Brazilian cities over Portuguese islands)
+const KNOWN_COORDS: Record<string, { latitude: number; longitude: number }> = {
+  'são miguel': { latitude: 37.7749, longitude: -25.4967 },
+  'sao miguel': { latitude: 37.7749, longitude: -25.4967 },
+  'azores': { latitude: 37.7412, longitude: -25.6756 },
+  'açores': { latitude: 37.7412, longitude: -25.6756 },
+  'ponta delgada': { latitude: 37.7371, longitude: -25.6664 },
+  'terceira': { latitude: 38.7031, longitude: -27.2256 },
+  'faial': { latitude: 38.5699, longitude: -28.7025 },
+  'pico': { latitude: 38.4667, longitude: -28.35 },
+  'flores': { latitude: 39.4297, longitude: -31.2156 },
+  'corvo': { latitude: 39.6906, longitude: -31.1142 },
+  'graciosa': { latitude: 39.0547, longitude: -28.0139 },
+  'são jorge': { latitude: 38.6478, longitude: -28.0531 },
+  'sao jorge': { latitude: 38.6478, longitude: -28.0531 },
+  'santa maria': { latitude: 36.9931, longitude: -25.1006 },
+};
+
+export function WeatherWidget({ destination, startDate, showCompact, targetDate, theme, lang, location: propLocation }: WeatherWidgetProps) {
   const t = (key: string) => TEXTS[key]?.[lang] || key;
 
-  const cacheKey = `v3-${destination}-${startDate}`;
+  const cacheKey = `v4-${destination}-${startDate}`;
   const [data, setData] = useState<WeatherDay[]>(weatherCache[cacheKey]?.data || []);
   const [loading, setLoading] = useState(!weatherCache[cacheKey]);
   const [error, setError] = useState<string | null>(null);
@@ -86,17 +106,33 @@ export function WeatherWidget({ destination, startDate, showCompact, targetDate,
           : destination;
           
         async function performGeocode(query: string) {
+          // 1. Check exact known-coordinates lookup (handles ambiguous Azores island names)
+          const queryLower = query.trim().toLowerCase();
+          for (const [key, coords] of Object.entries(KNOWN_COORDS)) {
+            if (queryLower === key || queryLower.startsWith(key + ',') || queryLower.startsWith(key + ' ')) {
+              return coords;
+            }
+          }
+
           if (geocodeCache[query]) return geocodeCache[query];
           
-          // Deduplicate geocoding fetches too
+          // Deduplicate geocoding fetches
           const geoKey = `geo-${query}`;
           if (!fetchPromises[geoKey]) {
-             fetchPromises[geoKey] = fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=1`)
-              .then(async res => {
-                if (res.status === 429) throw new Error('Weather Service Rate Limit (429)');
-                const d = await res.json();
-                return d.results?.[0] || null;
-              });
+            fetchPromises[geoKey] = fetch(
+              `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=5&language=en&format=json`
+            ).then(async res => {
+              if (res.status === 429) throw new Error('Weather Service Rate Limit (429)');
+              const d = await res.json();
+              const results = d.results || [];
+              if (!results.length) return null;
+              // Prefer Portugal (pt) over other countries to resolve Azores correctly
+              const ptResult = results.find((r: any) => r.country_code === 'PT' || r.country_code === 'pt');
+              return ptResult || results[0];
+            }).catch(err => {
+              delete fetchPromises[geoKey]; // Allow retry on error
+              throw err;
+            });
           }
           
           const result = await fetchPromises[geoKey];
@@ -105,9 +141,13 @@ export function WeatherWidget({ destination, startDate, showCompact, targetDate,
         }
 
         const fetchWork = (async () => {
-          let location = await performGeocode(safeDest);
-          if (!location && safeDest.includes(',')) location = await performGeocode(safeDest.split(',')[0].trim());
-          if (!location) location = await performGeocode(safeDest);
+          let location = propLocation ? { latitude: propLocation.lat, longitude: propLocation.lng } : null;
+          
+          if (!location) {
+            location = await performGeocode(safeDest);
+            if (!location && safeDest.includes(',')) location = await performGeocode(safeDest.split(',')[0].trim());
+          }
+          
           if (!location) throw new Error(`Location not found`);
           
           const { latitude, longitude } = location;
@@ -129,43 +169,25 @@ export function WeatherWidget({ destination, startDate, showCompact, targetDate,
             return `${y}-${m}-${d}`;
           };
 
-          // Forecast API: supports today → today+16 days
-          // Use archive if trip starts more than 16 days from now OR is entirely in the past (>30 days ago)
-          const MAX_FORECAST_OFFSET = 16; // open-meteo hard limit
-          const tripTooFarFuture = diffDays > MAX_FORECAST_OFFSET;
-          const tripTooFarPast = diffDays < -30;
-
-          if (!tripTooFarFuture && !tripTooFarPast) {
-            // Forecast window — clamp both dates to the valid range
-            const forecastWindowEnd = new Date(today);
-            forecastWindowEnd.setDate(forecastWindowEnd.getDate() + MAX_FORECAST_OFFSET);
-
-            // start_date must be >= today (API rejects past dates on /forecast)
-            const clampedStart = diffDays < 0 ? today : tripStart;
-
-            // end_date = trip start + 10 days, but capped at the forecast window
-            const desiredEnd = new Date(tripStart);
-            desiredEnd.setDate(desiredEnd.getDate() + 10);
-            const clampedEnd = desiredEnd > forecastWindowEnd ? forecastWindowEnd : desiredEnd;
-
-            // Safety: if clamping produced start > end, fall through to archive
-            if (clampedStart > clampedEnd) {
-              historical = true;
-              const lastYearStart = new Date(tripStart);
-              lastYearStart.setFullYear(lastYearStart.getFullYear() - 1);
-              const end = new Date(lastYearStart);
-              end.setDate(end.getDate() + 10);
-              url = `https://archive-api.open-meteo.com/v1/archive?latitude=${latitude}&longitude=${longitude}&daily=weathercode,temperature_2m_max,temperature_2m_min,windspeed_10m_max,precipitation_sum&hourly=temperature_2m,precipitation,weather_code&timezone=auto&start_date=${toLocalIso(lastYearStart)}&end_date=${toLocalIso(end)}`;
-            } else {
-              url = `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&daily=weathercode,temperature_2m_max,temperature_2m_min,windspeed_10m_max,precipitation_sum&hourly=temperature_2m,precipitation,weather_code&timezone=auto&start_date=${toLocalIso(clampedStart)}&end_date=${toLocalIso(clampedEnd)}`;
-            }
-          } else {
+          // Forecast API supports up to 14-16 days ahead safely, and up to 90 days in the past.
+          const tripEnd = new Date(tripStart);
+          tripEnd.setDate(tripEnd.getDate() + 10);
+          
+          const tripEndDiffDays = Math.ceil((tripEnd.getTime() - today.getTime()) / (1000 * 3600 * 24));
+          const tripStartDiffDays = diffDays;
+          
+          // If the trip is too far in the past (>60 days) or ends beyond the reliable 14-day forecast window,
+          // we use the historical archive data from last year to ensure a full, stable 10-day dataset.
+          if (tripStartDiffDays < -60 || tripEndDiffDays > 14) {
             historical = true;
             const lastYearStart = new Date(tripStart);
             lastYearStart.setFullYear(lastYearStart.getFullYear() - 1);
             const end = new Date(lastYearStart);
             end.setDate(end.getDate() + 10);
             url = `https://archive-api.open-meteo.com/v1/archive?latitude=${latitude}&longitude=${longitude}&daily=weathercode,temperature_2m_max,temperature_2m_min,windspeed_10m_max,precipitation_sum&hourly=temperature_2m,precipitation,weather_code&timezone=auto&start_date=${toLocalIso(lastYearStart)}&end_date=${toLocalIso(end)}`;
+          } else {
+            // Fully within supported forecast/recent-past window
+            url = `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&daily=weathercode,temperature_2m_max,temperature_2m_min,windspeed_10m_max,precipitation_sum&hourly=temperature_2m,precipitation,weather_code&timezone=auto&start_date=${toLocalIso(tripStart)}&end_date=${toLocalIso(tripEnd)}`;
           }
 
           const weatherRes = await fetch(url);

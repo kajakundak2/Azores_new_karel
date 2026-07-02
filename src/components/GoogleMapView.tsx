@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useMemo, useCallback, useRef, Component, ErrorInfo, ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Map as GoogleMap,
   InfoWindow,
@@ -87,99 +88,87 @@ function ClassicMarkers({
 }) {
   const map = useMap();
   const markerLib = useMapsLibrary('marker');
-  const markersRef = useRef<Map<string, { marker: google.maps.marker.AdvancedMarkerElement; pin: google.maps.marker.PinElement; listeners: { type: string; handler: any }[] }>>(new Map());
+  const markersRef = useRef<Map<string, { marker: google.maps.marker.AdvancedMarkerElement; pin: google.maps.marker.PinElement }>>(new Map());
 
-  // 1. Manage Marker Creation/Deletion/Listeners
+  // Store latest callbacks in refs so the creation effect doesn't depend on them
+  const onMarkerClickRef = useRef(onMarkerClick);
+  onMarkerClickRef.current = onMarkerClick;
+  const onMarkerHoverRef = useRef(onMarkerHover);
+  onMarkerHoverRef.current = onMarkerHover;
+
+  // Global hover debounce ref shared across all markers in this instance
+  const hoverTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Track marker IDs for stable dependency
+  const markerIds = markers.map(m => m.poi.id).join(',');
+
+  // 1. Manage Marker Creation/Deletion — only runs when the set of IDs changes
   useEffect(() => {
     if (!map || typeof google === 'undefined' || !markerLib) return;
 
     const currentMarkerIds = new Set(markers.map(m => m.poi.id));
 
     // Delete markers that are no longer in the list
-    markersRef.current.forEach(({ marker, listeners }, id) => {
+    markersRef.current.forEach(({ marker }, id) => {
       if (!currentMarkerIds.has(id)) {
-        if (marker.content) listeners.forEach(l => (marker.content as Element).removeEventListener(l.type, l.handler));
         marker.map = null;
         markersRef.current.delete(id);
       }
     });
 
-    // Create/Update markers
+    // Create new markers (skip existing ones)
     markers.forEach(({ poi, color, label }) => {
-      if (!poi.location) return;
+      if (!poi.location || markersRef.current.has(poi.id)) return;
 
-      let entry = markersRef.current.get(poi.id);
-      
-      if (!entry) {
-        // Create new marker
-        const pin = new markerLib.PinElement({
-          background: color,
-          borderColor: 'white',
-          glyphText: label || '',
-          glyphColor: 'white',
-        });
+      const pin = new markerLib.PinElement({
+        background: color,
+        borderColor: 'white',
+        glyphText: label || '',
+        glyphColor: 'white',
+      });
 
-        const marker = new markerLib.AdvancedMarkerElement({
-          map,
-          position: { lat: poi.location.lat, lng: poi.location.lng },
-          content: pin.element,
-          title: poi.title.en || poi.title.cs,
-        });
+      const marker = new markerLib.AdvancedMarkerElement({
+        map,
+        position: { lat: poi.location.lat, lng: poi.location.lng },
+        content: pin.element,
+        title: poi.title.en || poi.title.cs,
+      });
 
-        entry = { marker, pin, listeners: [] };
-        markersRef.current.set(poi.id, entry);
-      }
-
-      // Update listeners to use latest POI capture
-      const { marker, listeners } = entry;
-      
-      // Clean up previous listeners from the content element
-      if (marker.content) {
-        listeners.forEach(l => (marker.content as Element).removeEventListener(l.type, l.handler));
-      }
-      // Note: gmp-click is a special event on the marker itself
-      marker.removeEventListener('gmp-click', (entry as any)._clickHandler);
-
-      entry.listeners = [];
-
-      const clickHandler = (e: any) => {
+      // Click: use ref so handler always calls latest callback
+      marker.addEventListener('gmp-click', (e: any) => {
         if (e.stop) e.stop();
-        onMarkerClick(poi);
-      };
-      (entry as any)._clickHandler = clickHandler;
-      marker.addEventListener('gmp-click', clickHandler);
+        onMarkerClickRef.current(poi);
+      });
 
-      if (onMarkerHover && marker.content) {
-        const overHandler = () => {
-          if ((entry as any)._leaveTimeout) clearTimeout((entry as any)._leaveTimeout);
-          onMarkerHover(poi);
-        };
-        const outHandler = () => {
-          (entry as any)._leaveTimeout = setTimeout(() => {
-            onMarkerHover(null);
-          }, 50);
-        };
-        (marker.content as Element).addEventListener('mouseenter', overHandler);
-        (marker.content as Element).addEventListener('mouseleave', outHandler);
-        entry.listeners.push({ type: 'mouseenter', handler: overHandler });
-        entry.listeners.push({ type: 'mouseleave', handler: outHandler });
+      // Hover: debounced to avoid flicker with InfoWindow overlay
+      if (pin.element) {
+        pin.element.addEventListener('mouseenter', () => {
+          if (hoverTimeoutRef.current) clearTimeout(hoverTimeoutRef.current);
+          onMarkerHoverRef.current?.(poi);
+        });
+        pin.element.addEventListener('mouseleave', () => {
+          if (hoverTimeoutRef.current) clearTimeout(hoverTimeoutRef.current);
+          hoverTimeoutRef.current = setTimeout(() => {
+            onMarkerHoverRef.current?.(null);
+          }, 120);
+        });
       }
+
+      markersRef.current.set(poi.id, { marker, pin });
     });
 
     return () => {
       // Full cleanup on unmount
-      markersRef.current.forEach(({ marker, listeners }, id) => {
-        if (marker.content) {
-          listeners.forEach(l => (marker.content as Element).removeEventListener(l.type, l.handler));
-        }
-        marker.removeEventListener('gmp-click', (markersRef.current.get(id) as any)._clickHandler);
+      if (hoverTimeoutRef.current) clearTimeout(hoverTimeoutRef.current);
+      markersRef.current.forEach(({ marker }) => {
         marker.map = null;
       });
       markersRef.current.clear();
     };
-  }, [map, markers, markerLib, onMarkerClick, onMarkerHover]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [map, markerLib, markerIds]);
 
-  // 2. Manage Visual Updates (Hover/Color) independently
+  // 2. Visual hover updates — only runs when hoveredId changes
   useEffect(() => {
     if (!map || !markerLib) return;
     
@@ -192,13 +181,11 @@ function ClassicMarkers({
       
       marker.zIndex = isHovered ? 999 : 1;
 
-      // Update the stored PinElement's properties directly — no DOM recreation
       pin.background = isHovered ? '#ffffff' : color;
       pin.borderColor = isHovered ? color : 'white';
       pin.glyphText = label || '';
       pin.glyphColor = isHovered ? color : 'white';
 
-      // Apply smooth scale via CSS on the underlying DOM element
       if (pin.element) {
         pin.element.style.transition = 'all 0.3s ease-out';
         pin.element.style.transformOrigin = 'bottom center';
@@ -572,6 +559,17 @@ function GoogleMapInner({
   const t = createT(lang);
   const [selectedPoi, setSelectedPoi] = useState<POI | null>(null);
   const [searchResult, setSearchResult] = useState<POI | null>(null);
+  const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
+  const mapContainerRef = useRef<HTMLDivElement | null>(null);
+
+  // Track mouse position globally so the portal tooltip follows cursor without using InfoWindow
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      setMousePos({ x: e.clientX, y: e.clientY });
+    };
+    window.addEventListener('mousemove', handleMouseMove);
+    return () => window.removeEventListener('mousemove', handleMouseMove);
+  }, []);
 
   const getConvertedPrice = useCallback((poiItem: POI) => {
     return formatPrice(poiItem.cost, poiItem.priceInEuro, currency || 'EUR', rates || {}, lang);
@@ -845,27 +843,34 @@ function GoogleMapInner({
         />
       )}
 
-      {/* Hover Preview - Now as a themed InfoWindow on the map */}
-      {hoveredPoi && hoveredPoi.location && (
-        <InfoWindow
-          position={{ lat: hoveredPoi.location.lat, lng: hoveredPoi.location.lng }}
-          pixelOffset={window.google?.maps?.Size ? new window.google.maps.Size(0, -45) : undefined}
-          headerDisabled
-          disableAutoPan
+      {/* Hover Preview — Portal tooltip anchored to cursor (no InfoWindow = no flicker) */}
+      {hoveredPoi && mousePos && createPortal(
+        <div
+          style={{
+            position: 'fixed',
+            left: mousePos.x + 16,
+            top: mousePos.y - 8,
+            zIndex: 99999,
+            pointerEvents: 'none',
+            transform: 'translateY(-50%)',
+          }}
         >
-          <div 
-            className={`p-2 flex items-center gap-3 w-max max-w-xs shadow-xl rounded-xl transition-all ${theme === 'dark' ? 'bg-zinc-950 text-white' : 'bg-white text-slate-900 outline outline-1 outline-slate-200'}`}
-            style={{ 
-              backgroundColor: theme === 'dark' ? '#09090b' : '#ffffff',
-              color: theme === 'dark' ? '#ffffff' : '#0f172a',
-              pointerEvents: 'none'
+          <div
+            className={`p-2 flex items-center gap-3 w-max max-w-xs shadow-2xl rounded-xl border ${
+              theme === 'dark'
+                ? 'bg-zinc-950 text-white border-white/10'
+                : 'bg-white text-slate-900 border-slate-200'
+            }`}
+            style={{
+              backdropFilter: 'blur(12px)',
+              animation: 'fadeInTooltip 0.12s ease-out',
             }}
           >
             {hoveredPoi.imageUrl ? (
-              <img 
-                src={hoveredPoi.imageUrl} 
-                className="w-12 h-12 rounded-lg object-cover shrink-0" 
-                alt={t('map_preview')} 
+              <img
+                src={hoveredPoi.imageUrl}
+                className="w-12 h-12 rounded-lg object-cover shrink-0"
+                alt={t('map_preview')}
                 referrerPolicy="no-referrer"
               />
             ) : (
@@ -884,7 +889,8 @@ function GoogleMapInner({
               )}
             </div>
           </div>
-        </InfoWindow>
+        </div>,
+        document.body
       )}
 
       {/* Info Window for POIs */}
