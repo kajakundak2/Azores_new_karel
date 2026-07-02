@@ -7,7 +7,7 @@ import { Routes, Route, useNavigate, useParams } from 'react-router-dom';
 import { TreasureHuntGame } from './components/characters/TreasureHuntGame';
 import { Trip } from './data';
 
-function TripRouteWrapper({ trips, activeTripId, activeTrip, setActiveTripId, itinerary, days, ...props }: any) {
+function TripRouteWrapper({ trips, activeTripId, activeTrip, setActiveTripId, itinerary, days, regenerateAssets, isGeneratingLibrary, ...props }: any) {
   const { tripId } = useParams<{ tripId: string }>();
 
   useEffect(() => {
@@ -32,6 +32,8 @@ function TripRouteWrapper({ trips, activeTripId, activeTrip, setActiveTripId, it
       itinerary={itinerary}
       days={days}
       setActiveTripId={setActiveTripId}
+      regenerateAssets={regenerateAssets}
+      isGeneratingLibrary={isGeneratingLibrary}
       {...props}
     />
   );
@@ -56,15 +58,15 @@ function LandingRouteWrapper({ trips, createTrip, setActiveTripId, deleteTrip, l
   };
 
   return (
-    <LandingPage 
-      trips={trips} 
-      onCreateTrip={handleCreateTrip} 
-      onSelectTrip={handleSelectTrip} 
-      onDeleteTrip={deleteTrip} 
-      lang={lang} 
+    <LandingPage
+      trips={trips}
+      onCreateTrip={handleCreateTrip}
+      onSelectTrip={handleSelectTrip}
+      onDeleteTrip={deleteTrip}
+      lang={lang}
       onLanguageToggle={(l) => setLang(l)}
-      theme={theme} 
-      onThemeToggle={() => setTheme((p: string) => p === 'dark' ? 'light' : 'dark')} 
+      theme={theme}
+      onThemeToggle={() => setTheme((p: string) => p === 'dark' ? 'light' : 'dark')}
     />
   );
 }
@@ -83,14 +85,14 @@ function MinigameRouteWrapper({ lang }: { lang: 'en' | 'cs' }) {
 export default function App() {
   const [lang, setLang] = useState('en');
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
-  
-  const { 
-    trips, 
-    activeTripId, 
-    activeTrip, 
-    itinerary, 
-    addPoi, 
-    removePoi, 
+
+  const {
+    trips,
+    activeTripId,
+    activeTrip,
+    itinerary,
+    addPoi,
+    removePoi,
     clearDay,
     clearItinerary,
     updateTrip,
@@ -113,12 +115,14 @@ export default function App() {
     removeDay,
     setDayTheme,
     addToLibrary,
-    removeFromLibrary
+    removeFromLibrary,
+    regenerateAssets,         // <-- Exported correctly from useItineraryState
+    isGeneratingLibrary
   } = useItineraryState();
 
   const mapsApiKey = (import.meta as any).env?.VITE_GOOGLE_MAPS_API_KEY || '';
 
-  const [notifications, setNotifications] = useState<{id: string, message: string, type: 'error' | 'warning'}[]>([]);
+  const [notifications, setNotifications] = useState<{ id: string, message: string, type: 'error' | 'warning' }[]>([]);
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark');
@@ -163,12 +167,11 @@ export default function App() {
       {notifications.length > 0 && (
         <div className="fixed top-4 right-4 z-[9999] flex flex-col gap-2 pointer-events-none">
           {notifications.map(n => (
-            <div key={n.id} className={`p-4 rounded shadow-lg text-sm max-w-sm pointer-events-auto ${
-              n.type === 'error' ? 'bg-red-500 text-white' : 'bg-amber-500 text-white'
-            }`}>
+            <div key={n.id} className={`p-4 rounded shadow-lg text-sm max-w-sm pointer-events-auto ${n.type === 'error' ? 'bg-red-500 text-white' : 'bg-amber-500 text-white'
+              }`}>
               <div className="flex items-start justify-between">
                 <span>{n.message}</span>
-                <button 
+                <button
                   onClick={() => setNotifications(prev => prev.filter(x => x.id !== n.id))}
                   className="ml-4 opacity-80 hover:opacity-100"
                 >
@@ -181,19 +184,19 @@ export default function App() {
       )}
       <Routes>
         <Route path="/" element={
-          <LandingRouteWrapper 
-            trips={trips} 
-            createTrip={createTrip} 
-            setActiveTripId={setActiveTripId} 
-            deleteTrip={deleteTrip} 
-            lang={lang} 
+          <LandingRouteWrapper
+            trips={trips}
+            createTrip={createTrip}
+            setActiveTripId={setActiveTripId}
+            deleteTrip={deleteTrip}
+            lang={lang}
             setLang={setLang}
-            theme={theme} 
-            setTheme={setTheme} 
+            theme={theme}
+            setTheme={setTheme}
           />
         } />
         <Route path="/trip/:tripId" element={
-          <TripRouteWrapper 
+          <TripRouteWrapper
             trips={trips}
             activeTripId={activeTripId}
             activeTrip={activeTrip}
@@ -221,6 +224,8 @@ export default function App() {
             setDayTheme={setDayTheme}
             addToLibrary={addToLibrary}
             removeFromLibrary={removeFromLibrary}
+            regenerateAssets={regenerateAssets} // <-- Passed down to Wrapper
+            isGeneratingLibrary={isGeneratingLibrary} // <-- Passed down to Wrapper
             lang={lang}
             setLang={setLang}
             theme={theme}

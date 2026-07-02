@@ -165,20 +165,20 @@ function ClassicMarkers({
       });
       markersRef.current.clear();
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [map, markerLib, markerIds]);
 
   // 2. Visual hover updates — only runs when hoveredId changes
   useEffect(() => {
     if (!map || !markerLib) return;
-    
+
     markers.forEach(({ poi, color, label }) => {
       const entry = markersRef.current.get(poi.id);
       if (!entry) return;
       const { marker, pin } = entry;
 
       const isHovered = hoveredId === poi.id;
-      
+
       marker.zIndex = isHovered ? 999 : 1;
 
       pin.background = isHovered ? '#ffffff' : color;
@@ -216,8 +216,11 @@ function MultimodalDirections({
 
   useEffect(() => {
     if (!map || typeof google === 'undefined' || !google.maps?.routes?.Route || !geometryLib || !markerLib) return;
-    
-    // Clear old map objects (Handles both Polylines and AdvancedMarkerElements)
+
+    // Cancellation flag to prevent memory leaks and API request spam on rapid re-renders
+    let isCancelled = false;
+
+    // Clear old map objects
     mapObjectsRef.current.forEach(obj => {
       if (typeof obj.setMap === 'function') {
         obj.setMap(null);
@@ -238,10 +241,17 @@ function MultimodalDirections({
     };
 
     const fetchRoutes = async () => {
+      // Small debounce: allows rapid React state updates (like Regenerating) to settle
+      // before we bombard Google with route requests.
+      await new Promise(resolve => setTimeout(resolve, 400));
+      if (isCancelled) return;
+
       for (let i = 0; i < located.length - 1; i++) {
+        if (isCancelled) break; // Check if user navigated away or regenerated again
+
         const from = located[i];
         const to = located[i + 1];
-        
+
         const mode = to.transportModeTo || 'car';
         const googleMode = modeToTravelMode[mode] || 'DRIVING';
 
@@ -264,10 +274,11 @@ function MultimodalDirections({
           }
 
           const response = await google.maps.routes.Route.computeRoutes(request);
+          if (isCancelled) break; // Immediately abandon parsing if component unmounted mid-request
 
           if (response.routes && response.routes.length > 0) {
             const route = response.routes[0];
-            
+
             // Helper to safely extract coordinates natively or from legacy classes
             const getPt = (p: any) => ({
               lat: typeof p.lat === 'function' ? p.lat() : p.lat,
@@ -277,10 +288,10 @@ function MultimodalDirections({
             if (googleMode === 'TRANSIT' && route.legs) {
               for (const leg of route.legs) {
                 if (!leg.steps) continue;
-                
+
                 for (const step of leg.steps) {
                   let stepPathPoints: google.maps.LatLngLiteral[] = [];
-                  
+
                   if ((step as any).polyline?.encodedPolyline) {
                     const decoded = geometryLib.encoding.decodePath((step as any).polyline.encodedPolyline);
                     stepPathPoints = decoded.map(getPt);
@@ -290,14 +301,14 @@ function MultimodalDirections({
                     stepPathPoints.push(getPt((step as any).startLocation));
                     stepPathPoints.push(getPt((step as any).endLocation));
                   }
-                  
+
                   if (stepPathPoints.length < 2) continue;
 
                   const isWalking = (step as any).travelMode === 'WALK' || (step as any).travelMode === 'WALKING';
                   const isTransit = (step as any).travelMode === 'TRANSIT';
-                  
+
                   const stepColor = isTransit ? ((step as any).transitDetails?.line?.color || '#3b82f6') : (isWalking ? '#0ea5e9' : color);
-                  
+
                   const polyline = new google.maps.Polyline({
                     path: stepPathPoints,
                     strokeColor: stepColor,
@@ -312,7 +323,7 @@ function MultimodalDirections({
                     zIndex: isTransit ? 50 : 10,
                   });
                   mapObjectsRef.current.push(polyline);
-                  
+
                   // Inject Detailed Transit Schedule Pop-Up
                   if (isTransit && (step as any).transitDetails) {
                     const details = (step as any).transitDetails;
@@ -320,13 +331,13 @@ function MultimodalDirections({
                     const lineInfo = details.transitLine || details.line;
                     const vehicleName = lineInfo?.vehicle?.name || 'Transit';
                     const shortName = lineInfo?.shortName || lineInfo?.name || '';
-                    
+
                     const getFmtTime = (nested: any) => {
                       if (details.localizedValues?.[nested]?.time?.text) return details.localizedValues[nested].time.text;
                       const r = details.stopDetails?.[nested] || details[nested];
                       if (r?.text) return r.text;
-                      if (r instanceof Date) return r.toLocaleTimeString(lang === 'cs' ? 'cs-CZ' : 'en-US', { hour: '2-digit', minute:'2-digit' });
-                      if (typeof r === 'string') return new Date(r).toLocaleTimeString(lang === 'cs' ? 'cs-CZ' : 'en-US', { hour: '2-digit', minute:'2-digit' });
+                      if (r instanceof Date) return r.toLocaleTimeString(lang === 'cs' ? 'cs-CZ' : 'en-US', { hour: '2-digit', minute: '2-digit' });
+                      if (typeof r === 'string') return new Date(r).toLocaleTimeString(lang === 'cs' ? 'cs-CZ' : 'en-US', { hour: '2-digit', minute: '2-digit' });
                       return 'N/A';
                     };
 
@@ -348,8 +359,8 @@ function MultimodalDirections({
                       if (td.localizedValues?.[nested]?.time?.text) return td.localizedValues[nested].time.text;
                       const r = td.stopDetails?.[nested] || td[nested];
                       if (r?.text) return r.text;
-                      if (r instanceof Date) return r.toLocaleTimeString(lang === 'cs' ? 'cs-CZ' : 'en-US', { hour: '2-digit', minute:'2-digit' });
-                      if (typeof r === 'string') return new Date(r).toLocaleTimeString(lang === 'cs' ? 'cs-CZ' : 'en-US', { hour: '2-digit', minute:'2-digit' });
+                      if (r instanceof Date) return r.toLocaleTimeString(lang === 'cs' ? 'cs-CZ' : 'en-US', { hour: '2-digit', minute: '2-digit' });
+                      if (typeof r === 'string') return new Date(r).toLocaleTimeString(lang === 'cs' ? 'cs-CZ' : 'en-US', { hour: '2-digit', minute: '2-digit' });
                       return '';
                     }
 
@@ -397,8 +408,7 @@ function MultimodalDirections({
                         </div>
                       `,
                     });
-                    
-                    // Create a modern custom UI tag for the transit marker
+
                     const pinContainer = document.createElement('div');
                     pinContainer.style.backgroundColor = stepColor;
                     pinContainer.style.borderRadius = '8px';
@@ -420,10 +430,9 @@ function MultimodalDirections({
                     });
                     mapObjectsRef.current.push(marker);
 
-                    // Block click from bubbling down to the underlying map POIs
                     const preventAndOpen = (e: any) => {
-                      if (e.stop) e.stop(); // Stops Maps native click (avoids e.placeId firing)
-                      if (e.domEvent) e.domEvent.stopPropagation(); // Stops DOM bubbling
+                      if (e.stop) e.stop();
+                      if (e.domEvent) e.domEvent.stopPropagation();
                     };
 
                     marker.addEventListener('gmp-click', (e: any) => {
@@ -431,7 +440,6 @@ function MultimodalDirections({
                       infoWin.open(map, marker);
                     });
 
-                    // Clicking the drawn bus line will ALSO open the schedule
                     polyline.addListener('click', (e: any) => {
                       preventAndOpen(e);
                       infoWin.setPosition(e.latLng);
@@ -487,6 +495,7 @@ function MultimodalDirections({
             }
           }
         } catch (error) {
+          if (isCancelled) break;
           console.error("Error computing route segment:", error);
           const polyline = new google.maps.Polyline({
             path: fallbackPoints,
@@ -498,12 +507,19 @@ function MultimodalDirections({
           });
           mapObjectsRef.current.push(polyline);
         }
+
+        // Small pause between segments to avoid triggering Google's rate limiter
+        if (!isCancelled) {
+          await new Promise(resolve => setTimeout(resolve, 150));
+        }
       }
     };
 
     fetchRoutes();
 
     return () => {
+      // Mark as cancelled so any background loop aborts immediately
+      isCancelled = true;
       mapObjectsRef.current.forEach(obj => {
         if (typeof obj.setMap === 'function') obj.setMap(null);
         else obj.map = null;
@@ -633,19 +649,18 @@ function GoogleMapInner({
   const handlePlaceSelect = useCallback((placeOrPoi: any) => {
     if (!placeOrPoi) return;
 
-    // 1. Identify the unique identifier (Google Place ID or our internal ID)
+    // 1. Identify the unique identifier
     const pid = placeOrPoi.place_id || placeOrPoi.googlePlaceId || placeOrPoi.id;
 
-    // 2. CHECK IF WE ALREADY HAVE THIS POI IN OUR DATA (to preserve AI enrichment)
-    // This is critical for keeping AI descriptions across different ways of opening the same place
-    const existing = allPois.find(p => p.id === pid || (p.googlePlaceId && p.googlePlaceId === pid));
+    // 2. CHECK IF WE ALREADY HAVE THIS POI IN OUR DATA
+    const existing = allPois?.find(p => p.id === pid || (p.googlePlaceId && p.googlePlaceId === pid));
     if (existing) {
       setSearchResult(existing);
       setSelectedPoi(null);
       return;
     }
 
-    // 3. If it's already a POI but not found in our data (new search result)
+    // 3. If it's already a POI but not found in our data
     if ('location' in placeOrPoi && !('place_id' in placeOrPoi)) {
       setSearchResult(placeOrPoi);
       setSelectedPoi(null);
@@ -732,14 +747,14 @@ function GoogleMapInner({
     const clickListener = map.addListener('click', async (e: any) => {
       if (e.placeId) {
         if (e.stop) e.stop();
-        
+
         try {
           const { Place } = google.maps.places;
           const place = new Place({ id: e.placeId });
           await place.fetchFields({
             fields: ['displayName', 'location', 'formattedAddress', 'rating', 'userRatingCount', 'photos', 'types', 'id', 'googleMapsURI', 'priceLevel', 'editorialSummary']
           });
-          
+
           import('../hooks/usePlacesSearch').then(({ newPlaceToPOI }) => {
             const newPoi = newPlaceToPOI(place as any);
             if (newPoi) handlePlaceSelect(newPoi);
@@ -748,8 +763,8 @@ function GoogleMapInner({
           console.error('Error fetching place details:', error);
         }
       } else {
-         setSearchResult(null);
-         setSelectedPoi(null);
+        setSearchResult(null);
+        setSelectedPoi(null);
       }
     });
 
@@ -781,7 +796,7 @@ function GoogleMapInner({
     if (!map) return;
     const bounds = new google.maps.LatLngBounds();
     let hasPoints = false;
-    
+
     activeMarkers.forEach(({ poi }) => {
       if (poi.location) {
         bounds.extend({ lat: poi.location.lat, lng: poi.location.lng });
@@ -808,8 +823,6 @@ function GoogleMapInner({
   useEffect(() => {
     if (!map) return;
     const listener = map.addListener('idle', () => {
-      // We can dispatch an event or use a ref, but actually we can just pass onBoundsChanged if needed.
-      // Easiest is to add window.lastMapBounds so usePlacesSearch can grab it directly without React re-renders.
       (window as any).lastMapBounds = map.getBounds();
     });
     return () => {
@@ -843,7 +856,7 @@ function GoogleMapInner({
         />
       )}
 
-      {/* Hover Preview — Portal tooltip anchored to cursor (no InfoWindow = no flicker) */}
+      {/* Hover Preview — Portal tooltip anchored to cursor */}
       {hoveredPoi && mousePos && createPortal(
         <div
           style={{
@@ -856,11 +869,10 @@ function GoogleMapInner({
           }}
         >
           <div
-            className={`p-2 flex items-center gap-3 w-max max-w-xs shadow-2xl rounded-xl border ${
-              theme === 'dark'
+            className={`p-2 flex items-center gap-3 w-max max-w-xs shadow-2xl rounded-xl border ${theme === 'dark'
                 ? 'bg-zinc-950 text-white border-white/10'
                 : 'bg-white text-slate-900 border-slate-200'
-            }`}
+              }`}
             style={{
               backdropFilter: 'blur(12px)',
               animation: 'fadeInTooltip 0.12s ease-out',
@@ -900,9 +912,9 @@ function GoogleMapInner({
           onCloseClick={() => setSelectedPoi(null)}
           headerDisabled
         >
-          <div 
-            className={`p-4 transition-all duration-500 rounded-[2rem] w-[260px] ${theme === 'dark' ? 'bg-zinc-950 text-white' : 'bg-white text-slate-900'}`} 
-            style={{ 
+          <div
+            className={`p-4 transition-all duration-500 rounded-[2rem] w-[260px] ${theme === 'dark' ? 'bg-zinc-950 text-white' : 'bg-white text-slate-900'}`}
+            style={{
               fontFamily: 'system-ui',
               backgroundColor: theme === 'dark' ? '#09090b' : '#ffffff',
               color: theme === 'dark' ? '#ffffff' : '#0f172a'
@@ -977,9 +989,9 @@ function GoogleMapInner({
           onCloseClick={() => setSearchResult(null)}
           headerDisabled
         >
-          <div 
-            className={`p-4 transition-all duration-500 rounded-[2rem] w-[260px] ${theme === 'dark' ? 'bg-zinc-950 text-white' : 'bg-white text-slate-900'}`} 
-            style={{ 
+          <div
+            className={`p-4 transition-all duration-500 rounded-[2rem] w-[260px] ${theme === 'dark' ? 'bg-zinc-950 text-white' : 'bg-white text-slate-900'}`}
+            style={{
               fontFamily: 'system-ui',
               backgroundColor: theme === 'dark' ? '#09090b' : '#ffffff',
               color: theme === 'dark' ? '#ffffff' : '#0f172a'

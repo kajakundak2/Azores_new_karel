@@ -21,7 +21,6 @@ export function toLocalIso(date: Date): string {
 /** Auto-calculate next available time slot for a day's itinerary. */
 function getNextTime(items: POI[]): string {
     if (items.length === 0) return '09:00';
-    // Find the latest "end time" across all existing items
     let latestEndMins = 9 * 60; // default 09:00
     for (const item of items) {
         if (!item.time) continue;
@@ -33,10 +32,7 @@ function getNextTime(items: POI[]): string {
     return `${String(Math.floor(clampedMins / 60)).padStart(2, '0')}:${String(clampedMins % 60).padStart(2, '0')}`;
 }
 
-/** 
- * Clean up object for Firestore by removing any 'undefined' values.
- * Firestore throws errors on 'undefined' but handles missing keys fine.
- */
+/** Clean up object for Firestore by removing any 'undefined' values. */
 function sanitizeForFirestore(obj: any): any {
     if (Array.isArray(obj)) {
         return obj.map(sanitizeForFirestore);
@@ -52,7 +48,6 @@ function sanitizeForFirestore(obj: any): any {
     return obj;
 }
 
-/** Format duration in minutes to a human-readable string. */
 export function formatDuration(minutes: number): string {
     if (minutes === 0) return '';
     const h = Math.floor(minutes / 60);
@@ -62,28 +57,21 @@ export function formatDuration(minutes: number): string {
     return `${h}h ${m}min`;
 }
 
-/** 
- * Keep stay markers in sync with the logistics.stays list.
- * Removes old markers and adds new ones based on check-in/out dates.
- */
 export function syncStaysToItinerary(stays: any[], itinerary: Record<string, POI[]>): Record<string, POI[]> {
     const newItinerary = { ...itinerary };
-    
-    // 1. Remove all old stay markers (identified by ID prefix)
+
     for (const date in newItinerary) {
-        newItinerary[date] = newItinerary[date].filter(poi => 
+        newItinerary[date] = newItinerary[date].filter(poi =>
             !poi.id.startsWith('stay-marker-') &&
             !poi.id.startsWith('checkin-stay-') &&
             !poi.id.startsWith('checkout-stay-')
         );
     }
-    
-    // 2. Add new stay markers
+
     stays.forEach(stay => {
         let current = parseDateString(stay.checkInDate);
         const checkOut = parseDateString(stay.checkOutDate);
-        
-        // Add Check-in marker
+
         const checkInIso = toLocalIso(current);
         if (!newItinerary[checkInIso]) newItinerary[checkInIso] = [];
         newItinerary[checkInIso].push({
@@ -98,19 +86,18 @@ export function syncStaysToItinerary(stays: any[], itinerary: Record<string, POI
             description: { en: `Check-in time`, cs: `Čas příjezdu` },
             address: stay.address
         });
-        
+
         while (current <= checkOut) {
             const iso = toLocalIso(current);
             if (!newItinerary[iso]) newItinerary[iso] = [];
-            
-            // Check if already has a stay marker for this day
+
             if (!newItinerary[iso].some(poi => poi.id.startsWith('stay-marker-'))) {
                 newItinerary[iso].push({
                     id: `stay-marker-${iso}`,
                     title: { en: `🏨 ${stay.name}`, cs: `🏨 ${stay.name}` },
-                    description: { 
-                        en: `Stay at ${stay.address || 'extracted location'}`, 
-                        cs: `Ubytování v ${stay.address || 'extrahovaná adresa'}` 
+                    description: {
+                        en: `Stay at ${stay.address || 'extracted location'}`,
+                        cs: `Ubytování v ${stay.address || 'extrahovaná adresa'}`
                     },
                     category: 'Special',
                     duration: 0,
@@ -123,7 +110,6 @@ export function syncStaysToItinerary(stays: any[], itinerary: Record<string, POI
             current.setDate(current.getDate() + 1);
         }
 
-        // Add Check-out marker
         const checkOutIso = toLocalIso(checkOut);
         if (!newItinerary[checkOutIso]) newItinerary[checkOutIso] = [];
         newItinerary[checkOutIso].push({
@@ -139,16 +125,14 @@ export function syncStaysToItinerary(stays: any[], itinerary: Record<string, POI
             address: stay.address
         });
     });
-    
+
     return newItinerary;
 }
 
-/** Calculate total duration of a day in hours. */
 export function calcDayDuration(items: POI[]): number {
     return items.reduce((sum, item) => sum + (item.duration || 0), 0);
 }
 
-/** Serialize the entire trip state into a rich text context for Sara AI. */
 export function getFullTripContext(trip: Trip | null, itinerary: Record<string, POI[]>): string {
     if (!trip) return 'No active trip.';
     const startDate = parseDateString(trip.startDate);
@@ -163,13 +147,11 @@ export function getFullTripContext(trip: Trip | null, itinerary: Record<string, 
     if (trip.preferences) ctx += `Preferences: ${trip.preferences}\n`;
     if (trip.planningMode) ctx += `Planning mode: ${trip.planningMode}\n`;
 
-    // Traveler profiles
     if (trip.travelerProfiles?.length) {
         ctx += '\n=== TRAVELERS ===\n';
         trip.travelerProfiles.forEach(p => ctx += `- ${p.name} (${p.gender}${p.age ? `, age ${p.age}` : ''})\n`);
     }
 
-    // Stays
     if (trip.logistics?.stays?.length) {
         ctx += '\n=== STAYS ===\n';
         trip.logistics.stays.forEach(s => {
@@ -181,7 +163,6 @@ export function getFullTripContext(trip: Trip | null, itinerary: Record<string, 
         });
     }
 
-    // Flights
     if (trip.logistics?.flights?.length) {
         ctx += '\n=== FLIGHTS ===\n';
         trip.logistics.flights.forEach(f => {
@@ -193,7 +174,6 @@ export function getFullTripContext(trip: Trip | null, itinerary: Record<string, 
         });
     }
 
-    // Itinerary with full POI details
     ctx += '\n=== ITINERARY ===\n';
     for (let i = 0; i < totalDays; i++) {
         const d = new Date(startDate);
@@ -221,7 +201,6 @@ export function getFullTripContext(trip: Trip | null, itinerary: Record<string, 
         }
     }
 
-    // Budget summary
     let staysCost = 0, actCost = 0, flightsCost = 0;
     trip.logistics?.stays?.forEach(s => { if (s.pricePerNight) staysCost += s.pricePerNight * s.nights; });
     Object.values(itinerary).forEach(pois => pois.forEach(p => { if (p.cost) actCost += p.cost; }));
@@ -231,12 +210,10 @@ export function getFullTripContext(trip: Trip | null, itinerary: Record<string, 
         ctx += `Stays: €${staysCost} | Activities: €${actCost} | Flights: €${flightsCost} | Total: €${staysCost + actCost + flightsCost}\n`;
     }
 
-    // Packing
     if (trip.logistics?.packingRequirements) {
         ctx += `\n=== PACKING ===\nRequirements: ${trip.logistics.packingRequirements}\n`;
     }
 
-    // Library
     if (trip.libraryPois?.length) {
         ctx += `\n=== LIBRARY (${trip.libraryPois.length} saved places) ===\n`;
         trip.libraryPois.slice(0, 20).forEach(p => {
@@ -247,7 +224,6 @@ export function getFullTripContext(trip: Trip | null, itinerary: Record<string, 
         });
     }
 
-    // Reference documents
     if (trip.referenceDocs?.length) {
         ctx += `\n=== REFERENCE DOCUMENTS ===\n`;
         trip.referenceDocs.forEach(d => {
@@ -262,12 +238,10 @@ export interface TripState {
     trips: Trip[];
     activeTripId: string | null;
     activeTrip: Trip | null;
-    
-    // Legacy mapping to active trip for partial backwards compatibility
     itinerary: Record<string, POI[]>;
     days: Date[];
     customPois: POI[];
-    
+
     addPoi: (dayIso: string, poi: POI) => Promise<void>;
     removePoi: (dayIso: string, poiId: string) => Promise<void>;
     addCustomPoi: (poi: POI) => Promise<void>;
@@ -275,8 +249,7 @@ export interface TripState {
     getJsonContext: () => string;
     clearDay: (dayIso: string) => Promise<void>;
     clearItinerary: () => Promise<void>;
-    
-    // Trip CRUD
+
     setActiveTripId: (id: string | null) => void;
     createTrip: (tripData: Partial<Trip>) => Promise<string>;
     updateTrip: (id: string, tripData: Partial<Trip>) => Promise<void>;
@@ -285,8 +258,8 @@ export interface TripState {
     removeReferenceDoc: (docId: string) => Promise<void>;
     updatePoi: (poi: POI) => Promise<void>;
     isGeneratingLibrary: boolean;
+    regenerateAssets: (types: 'videos' | 'library' | 'both') => Promise<void>; // <--- NEW EXPORT
 
-    // Sara AI atomic mutations
     movePoi: (fromDayIso: string, toDayIso: string, poiId: string) => Promise<void>;
     modifyPoi: (dayIso: string, poiId: string, changes: Partial<POI>) => Promise<void>;
     reorderPois: (dayIso: string, orderedIds: string[]) => Promise<void>;
@@ -308,7 +281,7 @@ export function useItineraryState(): TripState {
     const [customPois, setCustomPois] = useState<POI[]>([]);
     const [isGeneratingLibrary, setIsGeneratingLibrary] = useState(false);
     const lastGeneratedDestRef = useRef<string | null>(null);
-    
+
     const tripsCollectionRef = collection(db, 'trips');
     const customPoisDocRef = doc(db, 'custom-pois', 'global');
 
@@ -349,128 +322,144 @@ export function useItineraryState(): TripState {
         });
     }, [activeTrip?.startDate, activeTrip?.endDate]);
 
+    // ── NEW: Regenerate Assets Function ──────────────────────────────────────────
+    const regenerateAssets = useCallback(async (types: 'videos' | 'library' | 'both') => {
+        if (!activeTripId || !activeTrip) return;
+        setIsGeneratingLibrary(true);
+
+        try {
+            const updates: Partial<Trip> = {};
+
+            // 1. Generate Library via Google Places with RANDOMIZED queries
+            if ((types === 'library' || types === 'both') && typeof google !== 'undefined' && google.maps?.places?.Place) {
+                const prefs = activeTrip.preferences ? `, focusing on: ${activeTrip.preferences}` : '';
+
+                // Randomize what we ask Google Places so we get fresh POIs!
+                const placeVariations = [
+                    'top tourist attractions and restaurants',
+                    'hidden gems and local spots',
+                    'must see places and cafes',
+                    'popular sights and landmarks',
+                    'best activities and viewpoints'
+                ];
+                const randomPlaceQuery = placeVariations[Math.floor(Math.random() * placeVariations.length)];
+
+                const startMonth = activeTrip.startDate ? new Date(activeTrip.startDate).toLocaleString('en-US', { month: 'long' }) : '';
+                const seasonQuery = startMonth ? ` best places to visit in ${startMonth}` : ` ${randomPlaceQuery}`;
+
+                console.log(`Generating Places for ${activeTrip.destination} using query: ${seasonQuery}${prefs}`);
+                const query = `${activeTrip.destination}${seasonQuery}${prefs}`;
+                updates.libraryPois = await searchPlacesAsync(query);
+            }
+
+            // 2. Fetch Inspiration Videos via Pexels with RANDOMIZATION & SHUFFLING
+            if (types === 'videos' || types === 'both') {
+                // Randomize the video style keywords
+                const videoStyles = [
+                    'nature landscape cinematic',
+                    'city travel aesthetic',
+                    'drone aerial beautiful',
+                    'scenic 4k travel',
+                    'timelapse sunset'
+                ];
+                const randomStyle = videoStyles[Math.floor(Math.random() * videoStyles.length)];
+
+                console.log(`Researching Pexels videos for: ${activeTrip.destination} ${randomStyle}`);
+                const pexelsKey = 'DrEuksUKaDCjKXcfM5P3ePBi3dP20ufRvk5vBynnMEaWDggIqLO3ALXk';
+
+                try {
+                    // Fetch 15 results instead of 6 so we have a pool to shuffle
+                    const response = await fetch(`https://api.pexels.com/v1/videos/search?query=${activeTrip.destination} ${randomStyle}&orientation=portrait&per_page=15`, {
+                        headers: { Authorization: pexelsKey }
+                    });
+                    const data = await response.json();
+
+                    let pexelsVideos = (data.videos || []).map((v: any) => ({
+                        id: v.id,
+                        video: v.video_files.find((f: any) => f.quality === 'hd' || f.width >= 1080)?.link || v.video_files[0].link,
+                        label: v.user.name,
+                        thumbnail: v.image
+                    }));
+
+                    // SHUFFLE the videos randomly
+                    pexelsVideos = pexelsVideos.sort(() => 0.5 - Math.random());
+
+                    if (pexelsVideos.length === 0) {
+                        pexelsVideos.push({
+                            id: 999,
+                            video: 'https://cdn.dev.beautifuldestinations.app/16891d31-1a48-4828-9814-8593e579ee09/original.mp4',
+                            label: 'Beautiful Destinations',
+                            thumbnail: 'https://images.pexels.com/photos/13911606/pexels-photo-13911606.jpeg?auto=compress&cs=tinysrgb&w=600'
+                        });
+                    }
+
+                    // Pick the first 4 from the newly shuffled list
+                    updates.inspirationVideos = pexelsVideos.slice(0, 4);
+                } catch (err) {
+                    console.error('Pexels fetch failed:', err);
+                    updates.inspirationVideos = [
+                        { id: 1, video: 'https://assets.mixkit.co/videos/preview/mixkit-mysterious-waterfall-in-a-lush-green-jungle-4281-large.mp4', label: 'Nature' },
+                        { id: 2, video: 'https://assets.mixkit.co/videos/preview/mixkit-beautiful-landscape-of-mountains-and-a-lake-4284-large.mp4', label: 'Views' }
+                    ];
+                }
+            }
+
+            // Save to Firestore
+            if (Object.keys(updates).length > 0) {
+                await updateDoc(doc(db, 'trips', activeTripId), sanitizeForFirestore(updates));
+            }
+        } catch (err) {
+            console.error('Failed to regenerate trip assets:', err);
+        } finally {
+            setIsGeneratingLibrary(false);
+        }
+    }, [activeTripId, activeTrip]);
+
     // Auto-generate base library using AI if it's missing or empty
     useEffect(() => {
         if (!activeTrip || !activeTrip.id || isGeneratingLibrary) return;
-        
+
         const needsLibrary = !activeTrip.libraryPois || activeTrip.libraryPois.length === 0;
         const needsVideos = !activeTrip.inspirationVideos || activeTrip.inspirationVideos.length === 0;
 
-        if ((needsLibrary || needsVideos) && 
-            activeTrip.destination !== lastGeneratedDestRef.current &&
-            typeof google !== 'undefined' && 
-            google.maps?.places?.Place) {
-            
-            setIsGeneratingLibrary(true);
+        if ((needsLibrary || needsVideos) && activeTrip.destination !== lastGeneratedDestRef.current) {
             lastGeneratedDestRef.current = activeTrip.destination;
-            
-            async function generateTripAssets() {
-                try {
-                    const updates: Partial<Trip> = {};
+            let targetTypes: 'both' | 'library' | 'videos' = 'both';
+            if (needsLibrary && !needsVideos) targetTypes = 'library';
+            if (!needsLibrary && needsVideos) targetTypes = 'videos';
 
-                    if (needsLibrary) {
-                        const prefs = activeTrip!.preferences ? `, focusing on: ${activeTrip!.preferences}` : '';
-                        const startMonth = activeTrip!.startDate ? new Date(activeTrip!.startDate).toLocaleString('en-US', { month: 'long' }) : '';
-                        const seasonQuery = startMonth ? ` top activities in ${startMonth}` : ' top tourist attractions and restaurants';
-                        
-                        console.log(`Generating Trip Assets for ${activeTrip!.destination} (${startMonth})${prefs}`);
-                        
-                        const query = `${activeTrip!.destination}${seasonQuery}${prefs}`;
-                        const items = await searchPlacesAsync(query);
-                        updates.libraryPois = items;
-                    }
-
-                    if (needsVideos) {
-                        console.log('Researching inspiration videos via Pexels for:', activeTrip!.destination);
-                        const pexelsKey = 'DrEuksUKaDCjKXcfM5P3ePBi3dP20ufRvk5vBynnMEaWDggIqLO3ALXk';
-                        
-                        try {
-                            const response = await fetch(`https://api.pexels.com/v1/videos/search?query=${activeTrip!.destination} nature landscape cinematic&orientation=portrait&per_page=6`, {
-                                headers: { Authorization: pexelsKey }
-                            });
-                            const data = await response.json();
-                            
-                            const pexelsVideos = (data.videos || []).map((v: any) => ({
-                                id: v.id,
-                                video: v.video_files.find((f: any) => f.quality === 'hd' || f.width >= 1080)?.link || v.video_files[0].link,
-                                label: v.user.name,
-                     }));
-
-                            // If no videos found, use a fallback quality one
-                            if (pexelsVideos.length === 0) {
-                                pexelsVideos.push({
-                                    id: 999,
-                                    video: 'https://cdn.dev.beautifuldestinations.app/16891d31-1a48-4828-9814-8593e579ee09/original.mp4',
-                                    label: 'Beautiful Destinations',
-                                    thumbnail: 'https://images.pexels.com/photos/13911606/pexels-photo-13911606.jpeg?auto=compress&cs=tinysrgb&w=600'
-                                });
-                            }
-                            
-                            updates.inspirationVideos = pexelsVideos.slice(0, 4);
-                        } catch (err) {
-                            console.error('Pexels fetch failed:', err);
-                            updates.inspirationVideos = [
-                                { id: 1, video: 'https://assets.mixkit.co/videos/preview/mixkit-mysterious-waterfall-in-a-lush-green-jungle-4281-large.mp4', label: 'Nature' },
-                                { id: 2, video: 'https://assets.mixkit.co/videos/preview/mixkit-beautiful-landscape-of-mountains-and-a-lake-4284-large.mp4', label: 'Views' }
-                            ];
-                        }
-                    }
-
-                    // Save to Firestore
-                    await updateDoc(doc(db, 'trips', activeTrip!.id), sanitizeForFirestore(updates));
-                } catch (err) {
-                    console.error('Failed to generate trip assets:', err);
-                } finally {
-                    setIsGeneratingLibrary(false);
-                }
-            }
-            
-            generateTripAssets();
+            regenerateAssets(targetTypes);
         }
-    }, [activeTrip?.id, activeTrip?.destination, activeTrip?.libraryPois?.length, activeTrip?.inspirationVideos?.length]);
+    }, [activeTrip?.id, activeTrip?.destination, activeTrip?.libraryPois?.length, activeTrip?.inspirationVideos?.length, isGeneratingLibrary, regenerateAssets]);
 
     const addPoi = useCallback(async (dayIso: string, poi: POI) => {
         if (!activeTripId || !activeTrip) return;
-        
         const currentItems = itinerary[dayIso] || [];
         if (currentItems.find(i => i.id === poi.id)) return;
-
         const autoTime = getNextTime(currentItems);
         const poiWithTime: POI = { ...poi, time: poi.time ?? autoTime };
-        
         const tripRef = doc(db, 'trips', activeTripId);
-        await updateDoc(tripRef, {
-            [`itinerary.${dayIso}`]: arrayUnion(sanitizeForFirestore(poiWithTime))
-        });
+        await updateDoc(tripRef, { [`itinerary.${dayIso}`]: arrayUnion(sanitizeForFirestore(poiWithTime)) });
     }, [activeTripId, activeTrip, itinerary]);
 
     const removePoi = useCallback(async (dayIso: string, poiId: string) => {
         if (!activeTripId || !activeTrip) return;
-
         const itemToRemove = (itinerary[dayIso] || []).find(i => i.id === poiId);
         if (!itemToRemove || itemToRemove.fixed) return;
-
         const tripRef = doc(db, 'trips', activeTripId);
-        await updateDoc(tripRef, {
-            [`itinerary.${dayIso}`]: arrayRemove(itemToRemove)
-        });
+        await updateDoc(tripRef, { [`itinerary.${dayIso}`]: arrayRemove(itemToRemove) });
     }, [activeTripId, activeTrip, itinerary]);
 
     const clearDay = useCallback(async (dayIso: string) => {
         if (!activeTripId || !activeTrip) return;
-        
         const currentItems = itinerary[dayIso] || [];
         const itemsToKeep = currentItems.filter(i => i.fixed);
-        
         const tripRef = doc(db, 'trips', activeTripId);
-        await updateDoc(tripRef, {
-            [`itinerary.${dayIso}`]: sanitizeForFirestore(itemsToKeep)
-        });
+        await updateDoc(tripRef, { [`itinerary.${dayIso}`]: sanitizeForFirestore(itemsToKeep) });
     }, [activeTripId, activeTrip, itinerary]);
 
     const clearItinerary = useCallback(async () => {
         if (!activeTripId || !activeTrip) return;
-        
         const updatedItinerary: Record<string, POI[]> = {};
         for (const [dayIso, items] of Object.entries(itinerary) as [string, POI[]][]) {
             const itemsToKeep = items.filter(i => i.fixed);
@@ -478,11 +467,8 @@ export function useItineraryState(): TripState {
                 updatedItinerary[dayIso] = itemsToKeep;
             }
         }
-        
         const tripRef = doc(db, 'trips', activeTripId);
-        await updateDoc(tripRef, {
-            itinerary: sanitizeForFirestore(updatedItinerary)
-        });
+        await updateDoc(tripRef, { itinerary: sanitizeForFirestore(updatedItinerary) });
     }, [activeTripId, activeTrip, itinerary]);
 
     const updatePoiTransportMode = useCallback(async (dayIso: string, poiId: string, mode: 'car' | 'bus' | 'walk' | 'bicycle') => {
@@ -490,14 +476,10 @@ export function useItineraryState(): TripState {
         const currentItems = itinerary[dayIso] || [];
         const index = currentItems.findIndex(i => i.id === poiId);
         if (index === -1) return;
-
         const updatedItems = [...currentItems];
         updatedItems[index] = { ...updatedItems[index], transportModeTo: mode };
-
         const tripRef = doc(db, 'trips', activeTripId);
-        await updateDoc(tripRef, {
-            [`itinerary.${dayIso}`]: sanitizeForFirestore(updatedItems)
-        });
+        await updateDoc(tripRef, { [`itinerary.${dayIso}`]: sanitizeForFirestore(updatedItems) });
     }, [activeTripId, activeTrip, itinerary]);
 
     const addCustomPoi = useCallback(async (poi: POI) => {
@@ -507,7 +489,6 @@ export function useItineraryState(): TripState {
 
     const getJsonContext = useCallback((): string => {
         if (!activeTrip) return '{}';
-        
         const simplified = Object.entries(itinerary).reduce<Record<string, object[]>>((acc, [date, items]: [string, POI[]]) => {
             if (items.length === 0) return acc;
             acc[date] = items.map(item => ({
@@ -520,7 +501,7 @@ export function useItineraryState(): TripState {
             }));
             return acc;
         }, {} as Record<string, object[]>);
-        
+
         return JSON.stringify({
             destination: activeTrip.destination,
             dates: `${activeTrip.startDate} to ${activeTrip.endDate}`,
@@ -537,11 +518,9 @@ export function useItineraryState(): TripState {
         const start = tripData.startDate || toLocalIso(new Date());
         const end = tripData.endDate || toLocalIso(new Date(Date.now() + 7 * 86400000));
         let initialItinerary: Record<string, POI[]> = {};
-
         if (tripData.logistics?.stays) {
             initialItinerary = syncStaysToItinerary(tripData.logistics.stays, initialItinerary);
         }
-
         const newTrip: Partial<Trip> = {
             title: tripData.title || (tripData.destination ? `${tripData.destination} Trip` : 'New Trip'),
             destination: tripData.destination || 'Destination',
@@ -553,7 +532,6 @@ export function useItineraryState(): TripState {
             logistics: { flights: [], stays: [] },
             ...tripData
         };
-        
         const tripRef = await addDoc(tripsCollectionRef, sanitizeForFirestore(newTrip));
         return tripRef.id;
     }, [tripsCollectionRef]);
@@ -564,9 +542,7 @@ export function useItineraryState(): TripState {
     }, []);
 
     const deleteTrip = useCallback(async (id: string) => {
-        if (activeTripId === id) {
-             setActiveTripId(null);
-        }
+        if (activeTripId === id) setActiveTripId(null);
         await deleteDoc(doc(db, 'trips', id));
     }, [activeTripId]);
 
@@ -578,25 +554,19 @@ export function useItineraryState(): TripState {
             id: `doc-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
             uploadedAt: new Date().toISOString()
         };
-        await updateDoc(tripRef, {
-            referenceDocs: arrayUnion(sanitizeForFirestore(docWithId))
-        });
+        await updateDoc(tripRef, { referenceDocs: arrayUnion(sanitizeForFirestore(docWithId)) });
     }, [activeTripId]);
 
     const removeReferenceDoc = useCallback(async (docId: string) => {
         if (!activeTripId || !activeTrip?.referenceDocs) return;
         const docToRemove = activeTrip.referenceDocs.find(d => d.id === docId);
         if (!docToRemove) return;
-        
         const tripRef = doc(db, 'trips', activeTripId);
-        await updateDoc(tripRef, {
-            referenceDocs: arrayRemove(docToRemove)
-        });
+        await updateDoc(tripRef, { referenceDocs: arrayRemove(docToRemove) });
     }, [activeTripId, activeTrip]);
 
     const updatePoi = useCallback(async (poi: POI) => {
         if (!activeTripId || !activeTrip) return;
-        
         const updatedTrip = { ...activeTrip };
         let changed = false;
 
@@ -612,8 +582,8 @@ export function useItineraryState(): TripState {
         if (changed) updatedTrip.itinerary = newItinerary;
 
         const newLibrary = [...(updatedTrip.libraryPois || [])];
-        const libIndex = newLibrary.findIndex(p => 
-            p.id === poi.id || 
+        const libIndex = newLibrary.findIndex(p =>
+            p.id === poi.id ||
             (poi.googlePlaceId && p.googlePlaceId === poi.googlePlaceId)
         );
         if (libIndex !== -1) {
@@ -635,19 +605,15 @@ export function useItineraryState(): TripState {
         }
     }, [activeTripId, activeTrip]);
 
-    // ── Sara AI Atomic Mutations ──────────────────────────────────────────
-
     const movePoi = useCallback(async (fromDayIso: string, toDayIso: string, poiId: string) => {
         if (!activeTripId || !activeTrip) return;
         const fromItems = itinerary[fromDayIso] || [];
         const poi = fromItems.find(p => p.id === poiId);
         if (!poi) return;
-
         const newFrom = fromItems.filter(p => p.id !== poiId);
         const toItems = itinerary[toDayIso] || [];
         const autoTime = getNextTime(toItems);
         const poiWithTime = { ...poi, time: autoTime };
-
         const tripRef = doc(db, 'trips', activeTripId);
         await updateDoc(tripRef, sanitizeForFirestore({
             [`itinerary.${fromDayIso}`]: newFrom,
@@ -656,22 +622,14 @@ export function useItineraryState(): TripState {
     }, [activeTripId, activeTrip, itinerary]);
 
     const modifyPoi = useCallback(async (dayIso: string, poiId: string, changes: Partial<POI>) => {
-        if (!activeTripId || !activeTrip) { console.warn('[modifyPoi] No active trip'); return; }
+        if (!activeTripId || !activeTrip) return;
         const currentItems = itinerary[dayIso] || [];
         const index = currentItems.findIndex(p => p.id === poiId);
-        if (index === -1) { console.warn(`[modifyPoi] POI "${poiId}" not found in ${dayIso} (${currentItems.length} items)`); return; }
-
+        if (index === -1) return;
         const updatedItems = [...currentItems];
-        const before = { time: updatedItems[index].time, duration: updatedItems[index].duration };
         updatedItems[index] = { ...updatedItems[index], ...changes };
-        const after = { time: updatedItems[index].time, duration: updatedItems[index].duration };
-        console.log(`[modifyPoi] ${dayIso}/${poiId}: before=${JSON.stringify(before)} → after=${JSON.stringify(after)}, changes=${JSON.stringify(changes)}`);
-
         const tripRef = doc(db, 'trips', activeTripId);
-        await updateDoc(tripRef, {
-            [`itinerary.${dayIso}`]: sanitizeForFirestore(updatedItems)
-        });
-        console.log(`[modifyPoi] Firestore write succeeded for ${dayIso}`);
+        await updateDoc(tripRef, { [`itinerary.${dayIso}`]: sanitizeForFirestore(updatedItems) });
     }, [activeTripId, activeTrip, itinerary]);
 
     const reorderPois = useCallback(async (dayIso: string, orderedIds: string[]) => {
@@ -682,15 +640,11 @@ export function useItineraryState(): TripState {
             const poi = currentItems.find(p => p.id === id);
             if (poi) reordered.push(poi);
         }
-        // Add any items not in the ordered list at the end
         for (const poi of currentItems) {
             if (!orderedIds.includes(poi.id)) reordered.push(poi);
         }
-
         const tripRef = doc(db, 'trips', activeTripId);
-        await updateDoc(tripRef, {
-            [`itinerary.${dayIso}`]: sanitizeForFirestore(reordered)
-        });
+        await updateDoc(tripRef, { [`itinerary.${dayIso}`]: sanitizeForFirestore(reordered) });
     }, [activeTripId, activeTrip, itinerary]);
 
     const addStay = useCallback(async (stay: Omit<Stay, 'id'>) => {
@@ -701,9 +655,7 @@ export function useItineraryState(): TripState {
             nights: Math.max(1, Math.round((parseDateString(stay.checkOutDate).getTime() - parseDateString(stay.checkInDate).getTime()) / 86400000))
         };
         const tripRef = doc(db, 'trips', activeTripId);
-        await updateDoc(tripRef, {
-            'logistics.stays': arrayUnion(sanitizeForFirestore(newStay))
-        });
+        await updateDoc(tripRef, { 'logistics.stays': arrayUnion(sanitizeForFirestore(newStay)) });
     }, [activeTripId, activeTrip]);
 
     const removeStay = useCallback(async (stayId: string) => {
@@ -712,9 +664,7 @@ export function useItineraryState(): TripState {
         const stayToRemove = stays.find(s => s.id === stayId);
         if (!stayToRemove) return;
         const tripRef = doc(db, 'trips', activeTripId);
-        await updateDoc(tripRef, {
-            'logistics.stays': arrayRemove(stayToRemove)
-        });
+        await updateDoc(tripRef, { 'logistics.stays': arrayRemove(stayToRemove) });
     }, [activeTripId, activeTrip]);
 
     const modifyStay = useCallback(async (stayId: string, changes: Partial<Stay>) => {
@@ -729,9 +679,7 @@ export function useItineraryState(): TripState {
             stays[idx].nights = Math.max(1, Math.round((co.getTime() - ci.getTime()) / 86400000));
         }
         const tripRef = doc(db, 'trips', activeTripId);
-        await updateDoc(tripRef, {
-            'logistics.stays': sanitizeForFirestore(stays)
-        });
+        await updateDoc(tripRef, { 'logistics.stays': sanitizeForFirestore(stays) });
     }, [activeTripId, activeTrip]);
 
     const addFlight = useCallback(async (flight: Omit<Flight, 'id'>) => {
@@ -743,9 +691,7 @@ export function useItineraryState(): TripState {
             stops: flight.stops || 0
         };
         const tripRef = doc(db, 'trips', activeTripId);
-        await updateDoc(tripRef, {
-            'logistics.flights': arrayUnion(sanitizeForFirestore(newFlight))
-        });
+        await updateDoc(tripRef, { 'logistics.flights': arrayUnion(sanitizeForFirestore(newFlight)) });
     }, [activeTripId, activeTrip]);
 
     const removeFlight = useCallback(async (flightId: string) => {
@@ -754,9 +700,7 @@ export function useItineraryState(): TripState {
         const flightToRemove = flights.find(f => f.id === flightId);
         if (!flightToRemove) return;
         const tripRef = doc(db, 'trips', activeTripId);
-        await updateDoc(tripRef, {
-            'logistics.flights': arrayRemove(flightToRemove)
-        });
+        await updateDoc(tripRef, { 'logistics.flights': arrayRemove(flightToRemove) });
     }, [activeTripId, activeTrip]);
 
     const addDay = useCallback(async () => {
@@ -771,15 +715,11 @@ export function useItineraryState(): TripState {
         if (!activeTripId || !activeTrip) return;
         const newItinerary = { ...itinerary };
         delete newItinerary[dayIso];
-        // Check if removing a day at the end
         const endDate = parseDateString(activeTrip.endDate);
         if (dayIso === toLocalIso(endDate)) {
             endDate.setDate(endDate.getDate() - 1);
             const tripRef = doc(db, 'trips', activeTripId);
-            await updateDoc(tripRef, sanitizeForFirestore({
-                endDate: toLocalIso(endDate),
-                itinerary: newItinerary
-            }));
+            await updateDoc(tripRef, sanitizeForFirestore({ endDate: toLocalIso(endDate), itinerary: newItinerary }));
         } else {
             const tripRef = doc(db, 'trips', activeTripId);
             await updateDoc(tripRef, sanitizeForFirestore({ itinerary: newItinerary }));
@@ -789,17 +729,13 @@ export function useItineraryState(): TripState {
     const setDayTheme = useCallback(async (dayIso: string, theme: string) => {
         if (!activeTripId) return;
         const tripRef = doc(db, 'trips', activeTripId);
-        await updateDoc(tripRef, {
-            [`dayThemes.${dayIso}`]: theme
-        });
+        await updateDoc(tripRef, { [`dayThemes.${dayIso}`]: theme });
     }, [activeTripId]);
 
     const addToLibrary = useCallback(async (poi: POI) => {
         if (!activeTripId) return;
         const tripRef = doc(db, 'trips', activeTripId);
-        await updateDoc(tripRef, {
-            libraryPois: arrayUnion(sanitizeForFirestore(poi))
-        });
+        await updateDoc(tripRef, { libraryPois: arrayUnion(sanitizeForFirestore(poi)) });
     }, [activeTripId]);
 
     const removeFromLibrary = useCallback(async (poiId: string) => {
@@ -808,46 +744,16 @@ export function useItineraryState(): TripState {
         const itemToRemove = library.find(p => p.id === poiId);
         if (!itemToRemove) return;
         const tripRef = doc(db, 'trips', activeTripId);
-        await updateDoc(tripRef, {
-            libraryPois: arrayRemove(itemToRemove)
-        });
+        await updateDoc(tripRef, { libraryPois: arrayRemove(itemToRemove) });
     }, [activeTripId, activeTrip]);
 
-    return { 
-        trips, 
-        activeTripId, 
-        activeTrip, 
-        itinerary, 
-        days,
-        customPois, 
-        addPoi, 
-        removePoi, 
-        clearDay,
-        clearItinerary,
-        addCustomPoi, 
-        updatePoiTransportMode,
-        getJsonContext,
-        setActiveTripId,
-        createTrip,
-        updateTrip,
-        deleteTrip,
-        addReferenceDoc,
-        removeReferenceDoc,
-        updatePoi,
-        isGeneratingLibrary,
-        // Sara AI atomic mutations
-        movePoi,
-        modifyPoi,
-        reorderPois,
-        addStay,
-        removeStay,
-        modifyStay,
-        addFlight,
-        removeFlight,
-        addDay,
-        removeDay,
-        setDayTheme,
-        addToLibrary,
-        removeFromLibrary
+    return {
+        trips, activeTripId, activeTrip, itinerary, days, customPois,
+        addPoi, removePoi, clearDay, clearItinerary, addCustomPoi,
+        updatePoiTransportMode, getJsonContext, setActiveTripId, createTrip,
+        updateTrip, deleteTrip, addReferenceDoc, removeReferenceDoc, updatePoi,
+        isGeneratingLibrary, regenerateAssets, movePoi, modifyPoi, reorderPois,
+        addStay, removeStay, modifyStay, addFlight, removeFlight,
+        addDay, removeDay, setDayTheme, addToLibrary, removeFromLibrary
     };
 }
